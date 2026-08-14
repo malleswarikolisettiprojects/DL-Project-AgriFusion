@@ -50,6 +50,19 @@ def get_default_cost_per_ha(crop_name: str) -> float:
     c_lower = str(crop_name).strip().lower()
     return float(DEFAULT_CULTIVATION_COSTS_PER_HA.get(c_lower, 35000.0))
 
+def estimate_principal_investment(crop_name: str, area: float) -> dict:
+    cost_per_ha = get_default_cost_per_ha(crop_name)
+    total_cost = cost_per_ha * max(float(area), 0.1)
+    return {
+        "cost_per_ha": cost_per_ha,
+        "total_principal": total_cost,
+        "seeds_cost": total_cost * 0.15,
+        "fertilizer_cost": total_cost * 0.25,
+        "irrigation_cost": total_cost * 0.15,
+        "machinery_cost": total_cost * 0.20,
+        "labor_cost": total_cost * 0.25
+    }
+
 def get_soil_texture_name(clay, sand, silt) -> str:
     try:
         c, s, si = float(clay), float(sand), float(silt)
@@ -720,22 +733,41 @@ def show_predictions():
                 default_district=st.session_state.get("c_district"),
             )
 
-        col_area, col_cost = st.columns(2)
-        with col_area:
-            mk_area = st.number_input("Land Area (Hectares)", min_value=0.1, value=2.5, step=0.5, key="mk_area")
-        with col_cost:
-            default_ha_cost = get_default_cost_per_ha(mk_crop)
-            mk_cost_per_ha = st.number_input(
-                "Principal Cultivation Cost (₹ / Hectare)",
-                min_value=1000.0,
-                value=default_ha_cost,
-                step=2000.0,
-                key="mk_cost_per_ha",
-                help="Estimated investment needed per hectare (seeds, fertilizers, diesel, labor, irrigation, machinery)."
-            )
+        mk_area = st.number_input("Land Area (Hectares)", min_value=0.1, value=2.5, step=0.5, key="mk_area")
 
-        total_principal_investment = mk_cost_per_ha * mk_area
-        st.caption(f"💵 Total Principal Amount Needed for {mk_area:.1f} Ha: **₹ {total_principal_investment:,.2f}**")
+        # Auto-calculate Estimated Principal Investment for this crop and area
+        est_principal = estimate_principal_investment(mk_crop, mk_area)
+        
+        # Display Estimated Principal Banner with Breakdown
+        st.markdown(f"""
+        <div style="background-color: rgba(14, 165, 233, 0.08); border-left: 4px solid #0EA5E9; padding: 14px 18px; border-radius: 10px; margin: 12px 0 16px 0;">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-size: 1rem; font-weight: 700; color: #0284C7;">💵 AI-Estimated Principal Needed:</span>
+                <span style="font-size: 1.25rem; font-weight: 800; color: #0284C7;">₹ {est_principal['total_principal']:,.0f}</span>
+            </div>
+            <p style="margin: 4px 0 8px 0; font-size: 0.88rem;">
+                Benchmark for <strong>{mk_crop}</strong> ({mk_area:.1f} Ha @ ₹ {est_principal['cost_per_ha']:,.0f}/Ha).
+            </p>
+            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; font-size: 0.82rem; text-align: center; background-color: rgba(255,255,255,0.06); padding: 8px; border-radius: 6px;">
+                <div>🌱 <strong>Seeds:</strong><br>₹ {est_principal['seeds_cost']:,.0f}</div>
+                <div>🧪 <strong>Fertilizer:</strong><br>₹ {est_principal['fertilizer_cost']:,.0f}</div>
+                <div>💧 <strong>Water:</strong><br>₹ {est_principal['irrigation_cost']:,.0f}</div>
+                <div>🚜 <strong>Machinery:</strong><br>₹ {est_principal['machinery_cost']:,.0f}</div>
+                <div>👥 <strong>Labor:</strong><br>₹ {est_principal['labor_cost']:,.0f}</div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        with st.expander("⚙️ Customize Principal Expenses (Optional)", expanded=False):
+            custom_ha_cost = st.number_input(
+                "Custom Cultivation Cost (₹ / Hectare)",
+                min_value=1000.0,
+                value=est_principal['cost_per_ha'],
+                step=2000.0,
+                key="mk_custom_ha_cost",
+                help="Change if your actual seed, labor, or fertilizer expenses differ from state averages."
+            )
+            mk_effective_principal = custom_ha_cost * mk_area
 
         mk_season = get_season(mk_date)
         if st.button("🚀 Forecast Market Selling Price & Net Profit", type="primary", key="btn_market"):
@@ -756,7 +788,7 @@ def show_predictions():
                     st.session_state["mod_market_crop"] = mk_crop
                     st.session_state["mod_market_date"] = mk_date
                     st.session_state["mod_market_district"] = mk_district
-                    st.session_state["mod_market_cost_per_ha"] = mk_cost_per_ha
+                    st.session_state["mod_market_principal_cost"] = mk_effective_principal
                     st.session_state["mod_market_area"] = mk_area
                     st.success(f"✅ Financial & Market Price Forecast Complete for {mk_crop}!")
                 except Exception as e:
@@ -768,7 +800,7 @@ def show_predictions():
             _display_date = st.session_state.get("mod_market_date", mk_date)
             _display_district = st.session_state.get("mod_market_district", mk_district)
             _display_area = float(st.session_state.get("mod_market_area", mk_area))
-            _display_cost_per_ha = float(st.session_state.get("mod_market_cost_per_ha", mk_cost_per_ha))
+            _display_total_cost = float(st.session_state.get("mod_market_principal_cost", est_principal['total_principal']))
             st.markdown("<br>", unsafe_allow_html=True)
 
             # Get predicted yield in Tons from the Yield Forecast Module
@@ -784,7 +816,7 @@ def show_predictions():
 
             price_val = float(res.get("predicted_price") or res.get("predicted_market_price") or 0.0)
             total_revenue = price_val * farmer_yield_qtl
-            total_cost = _display_cost_per_ha * _display_area
+            total_cost = _display_total_cost
             net_profit = total_revenue - total_cost
             roi_pct = (net_profit / total_cost * 100.0) if total_cost > 0 else 0.0
             profit_per_ha = net_profit / _display_area if _display_area > 0 else 0.0
@@ -803,11 +835,11 @@ def show_predictions():
                 </div>
                 <div style="background-color: rgba(128,128,128,0.08); border-radius: 10px; padding: 16px 20px; margin-bottom: 15px;">
                     <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 1.02rem;">
-                        <span>💵 <strong>Gross Market Revenue</strong> ({farmer_yield_qtl:,.1f} qtl × ₹ {price_val:,.2f}):</span>
+                        <span>💵 <strong>Gross Market Sales:</strong> ({farmer_yield_qtl:,.1f} qtl × ₹ {price_val:,.2f})</span>
                         <strong>₹ {total_revenue:,.2f}</strong>
                     </div>
                     <div style="display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 1.02rem; color: #E11D48;">
-                        <span>📉 <strong>Less: Principal Cultivation Cost</strong> ({_display_area:.1f} Ha × ₹ {_display_cost_per_ha:,.0f}):</span>
+                        <span>📉 <strong>Less: Estimated Principal Investment:</strong></span>
                         <strong>- ₹ {total_cost:,.2f}</strong>
                     </div>
                     <div style="border-top: 2px solid {profit_color}; padding-top: 10px; display: flex; justify-content: space-between; font-size: 1.25rem; font-weight: 800; color: {profit_color};">
@@ -816,7 +848,7 @@ def show_predictions():
                     </div>
                 </div>
                 <p style="margin: 0; font-size: 0.9rem;">
-                    💡 <strong>Net Return per Hectare:</strong> <strong style="color: {profit_color};">₹ {profit_per_ha:,.2f} / Ha</strong> | 🌾 Crop Maturity: <strong>{_mk_total_days} days</strong>
+                    💡 <strong>Estimated Return per Hectare:</strong> <strong style="color: {profit_color};">₹ {profit_per_ha:,.2f} / Ha</strong> | 🌾 Crop Maturity: <strong>{_mk_total_days} days</strong>
                 </p>
             </div>
             """
@@ -826,7 +858,7 @@ def show_predictions():
             with mka:
                 st.metric("Forecasted Price", f"₹ {price_val:,.2f}/qtl")
             with mkb:
-                st.metric("Total Principal Cost", f"₹ {total_cost:,.2f}")
+                st.metric("Estimated Principal Cost", f"₹ {total_cost:,.2f}")
             mkc, mkd = st.columns(2)
             with mkc:
                 st.metric("Gross Revenue", f"₹ {total_revenue:,.2f}")

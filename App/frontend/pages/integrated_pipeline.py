@@ -12,7 +12,7 @@ from App.backend.database.database import supabase
 from App.backend.database.predictions import save_prediction as save_full_prediction
 from App.backend.growth_stages import compute_date_range, compute_stage_boundaries
 from App.backend.seasons import get_season
-from App.frontend.pages.predictions import get_default_cost_per_ha, get_soil_texture_name
+from App.frontend.pages.predictions import get_default_cost_per_ha, get_soil_texture_name, estimate_principal_investment
 
 
 def safe_get(obj, key, default="N/A"):
@@ -413,8 +413,9 @@ def show_integrated_pipeline():
         total_revenue = price_val * farmer_yield_qtl
         
         # Cost of cultivation & Net Profit calculation
-        ha_cost = get_default_cost_per_ha(rec_crop)
-        total_principal = ha_cost * area
+        est_cost = estimate_principal_investment(rec_crop, area)
+        total_principal = est_cost["total_principal"]
+        ha_cost = est_cost["cost_per_ha"]
         net_profit = total_revenue - total_principal
         roi_pct = (net_profit / total_principal * 100.0) if total_principal > 0 else 0.0
         profit_per_ha = net_profit / area if area > 0 else 0.0
@@ -436,13 +437,20 @@ def show_integrated_pipeline():
                     <strong>₹ {total_revenue:,.2f}</strong>
                 </div>
                 <div style="display: flex; justify-content: space-between; margin-bottom: 6px; color: #E11D48;">
-                    <span>📉 <strong>Less: Principal Cultivation Cost</strong> ({area:.1f} Ha × ₹ {ha_cost:,.0f}/Ha):</span>
+                    <span>📉 <strong>Less: AI-Estimated Principal Investment</strong> ({area:.1f} Ha @ ₹ {ha_cost:,.0f}/Ha):</span>
                     <strong>- ₹ {total_principal:,.2f}</strong>
                 </div>
                 <div style="border-top: 2px solid {profit_color}; padding-top: 8px; display: flex; justify-content: space-between; font-size: 1.2rem; font-weight: 800; color: {profit_color};">
                     <span>{profit_label} (ROI: {roi_pct:+.1f}%):</span>
                     <span>₹ {net_profit:,.2f}</span>
                 </div>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; font-size: 0.82rem; text-align: center; background-color: rgba(128,128,128,0.05); padding: 8px; border-radius: 6px; margin-bottom: 12px;">
+                <div>🌱 <strong>Seeds:</strong><br>₹ {est_cost['seeds_cost']:,.0f}</div>
+                <div>🧪 <strong>Fertilizer:</strong><br>₹ {est_cost['fertilizer_cost']:,.0f}</div>
+                <div>💧 <strong>Water:</strong><br>₹ {est_cost['irrigation_cost']:,.0f}</div>
+                <div>🚜 <strong>Machinery:</strong><br>₹ {est_cost['machinery_cost']:,.0f}</div>
+                <div>👥 <strong>Labor:</strong><br>₹ {est_cost['labor_cost']:,.0f}</div>
             </div>
             <p style="margin: 0; font-size: 0.9rem;">
                 💡 <strong>Estimated Return:</strong> <strong style="color: {profit_color};">₹ {profit_per_ha:,.2f} / Hectare</strong>
