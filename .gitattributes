@@ -1,0 +1,4 @@
+Data/AP_TS_Weather_Dataset.csv filter=lfs diff=lfs merge=lfs -text
+Data/irrigation.csv filter=lfs diff=lfs merge=lfs -text
+App/pickles/market/model.pkl filter=lfs diff=lfs merge=lfs -text
+App/pickles/yield/model.pkl filter=lfs diff=lfs merge=lfs -text
