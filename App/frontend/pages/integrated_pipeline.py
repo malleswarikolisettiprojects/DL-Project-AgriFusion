@@ -334,15 +334,18 @@ def show_integrated_pipeline():
         texture_name = get_soil_texture_name(clay, sand, silt)
 
         with st.expander("🌾 View Farm Soil Texture & Nutrient Scan (ISRIC SoilGrids)", expanded=False):
-            sc1, sc2, sc3, sc4 = st.columns([1.5, 1, 1, 1])
+            # Row 1: Soil Texture + Nitrogen
+            sc1, sc2 = st.columns(2)
             with sc1:
-                st.metric("Soil Texture", texture_name)
+                st.metric("🌱 Soil Texture", texture_name)
             with sc2:
-                st.metric("Nitrogen (N)", f"{nitrogen:.0f} mg/kg")
+                st.metric("🧪 Soil Nitrogen (N)", f"{nitrogen:.0f} mg/kg", help="Higher value = more fertile soil")
+            # Row 2: Organic Carbon + Nutrient Capacity
+            sc3, sc4 = st.columns(2)
             with sc3:
-                st.metric("Organic Carbon", f"{soc:.1f} g/kg")
+                st.metric("🌿 Organic Carbon (SOC)", f"{soc:.1f} g/kg", help="Soil organic matter — more carbon means richer soil")
             with sc4:
-                st.metric("Cation Exchange", f"{cec:.1f} cmol/kg")
+                st.metric("⚡ Nutrient Holding Capacity", f"{cec:.1f} cmol/kg", help="How well soil holds fertilizer (CEC)")
             
             st.markdown(f"""
             <div style="background-color: rgba(13,148,136,0.08); border-left: 4px solid #0D9488; padding: 12px 16px; border-radius: 8px; margin-top: 10px; font-size: 0.92rem;">
@@ -357,25 +360,27 @@ def show_integrated_pipeline():
             try:
                 df_daily = pd.DataFrame(daily_data).copy()
                 if not df_daily.empty and "Date" in df_daily.columns:
-                    df_daily["Date_Str"] = pd.to_datetime(df_daily["Date"]).dt.strftime("%d %b (%a)")
+                    df_daily["Date"] = pd.to_datetime(df_daily["Date"])
                     for num_col in ["max_temperature", "mean_temperature", "min_temperature", "precipitation", "et0"]:
                         if num_col in df_daily.columns:
                             df_daily[num_col] = pd.to_numeric(df_daily[num_col], errors="coerce").round(1)
+                    df_daily["Date_Str"] = df_daily["Date"].dt.strftime("%d %b (%a)")
 
-                    with st.expander("📈 View Day-Wise Satellite Weather Forecast Charts", expanded=False):
+                    with st.expander("📈 View Day-Wise Weather Forecast Charts", expanded=False):
                         d_col1, d_col2 = st.columns(2)
                         with d_col1:
                             st.markdown("##### 🌡️ Daily Temperatures (°C)")
-                            temp_df = df_daily.set_index("Date_Str")[["max_temperature", "mean_temperature", "min_temperature"]].rename(
+                            temp_df = df_daily.set_index("Date_Str")[[c for c in ["max_temperature", "mean_temperature", "min_temperature"] if c in df_daily.columns]].rename(
                                 columns={"max_temperature": "Max Temp", "mean_temperature": "Mean Temp", "min_temperature": "Min Temp"}
                             )
-                            st.line_chart(temp_df, color=["#DC2626", "#F59E0B", "#3B82F6"])
+                            st.line_chart(temp_df, color=["#DC2626", "#F59E0B", "#3B82F6"][:len(temp_df.columns)])
                         with d_col2:
-                            st.markdown("##### 🌧️ Daily Rainfall & ET0 Evaporation (mm)")
+                            st.markdown("##### 🌧️ Daily Rainfall & Soil Water Evaporation (mm)")
+                            st.caption("Soil Water Evaporation = water your soil loses to sun/heat daily")
                             r_cols = [c for c in ["precipitation", "et0"] if c in df_daily.columns]
                             if r_cols:
                                 rain_df = df_daily.set_index("Date_Str")[r_cols].rename(
-                                    columns={"precipitation": "Rain (mm)", "et0": "ET0 Evaporation (mm)"}
+                                    columns={"precipitation": "Rainfall (mm)", "et0": "Soil Water Evaporation (mm)"}
                                 )
                                 st.bar_chart(rain_df, color=["#0284C7", "#10B981"][:len(r_cols)])
             except Exception:

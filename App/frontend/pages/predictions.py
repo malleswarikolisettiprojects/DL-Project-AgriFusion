@@ -323,17 +323,21 @@ def show_predictions():
 
             st.markdown("---")
             st.markdown("### 🔬 Area Soil & Scientific Verification")
-            st.caption("Live soil physical scan retrieved from ISRIC World SoilGrids and Open-Meteo Weather for your farm.")
+            st.caption("Live soil scan from ISRIC World SoilGrids and Open-Meteo Weather for your farm.")
 
-            st_col1, st_col2, st_col3, st_col4 = st.columns([1.5, 1, 1, 1])
-            with st_col1:
-                st.metric("Soil Texture", texture_name)
-            with st_col2:
-                st.metric("Soil Nitrogen (N)", f"{nitrogen:.0f} mg/kg", help="Available Nitrogen in topsoil")
-            with st_col3:
-                st.metric("Organic Carbon (SOC)", f"{soc:.1f} g/kg", help="Soil fertility and organic matter content")
-            with st_col4:
-                st.metric("Cation Exchange (CEC)", f"{cec:.1f} cmol/kg", help="Nutrient retention capacity")
+            # Row 1: Soil Texture + Nitrogen
+            r1c1, r1c2 = st.columns(2)
+            with r1c1:
+                st.metric("🌱 Soil Texture", texture_name)
+            with r1c2:
+                st.metric("🧪 Soil Nitrogen (N)", f"{nitrogen:.0f} mg/kg", help="Available Nitrogen in topsoil — higher is more fertile")
+
+            # Row 2: Organic Carbon + Cation Exchange
+            r2c1, r2c2 = st.columns(2)
+            with r2c1:
+                st.metric("🌿 Organic Carbon (SOC)", f"{soc:.1f} g/kg", help="Soil organic matter — more carbon means richer soil")
+            with r2c2:
+                st.metric("⚡ Nutrient Holding Capacity", f"{cec:.1f} cmol/kg", help="How well the soil holds fertilizer nutrients (CEC)")
 
             rain_val = weather_info.get('rainfall', 'N/A')
             try:
@@ -464,63 +468,88 @@ def show_predictions():
                 try:
                     df_daily = pd.DataFrame(daily_data).copy()
                     if not df_daily.empty and "Date" in df_daily.columns:
-                        df_daily["Date_Str"] = pd.to_datetime(df_daily["Date"]).dt.strftime("%d %b (%a)")
-                        
-                        # Round weather and rainfall numbers to clean 1-decimal values
+                        df_daily["Date"] = pd.to_datetime(df_daily["Date"])
+
+                        # Round weather numbers
                         for num_col in ["max_temperature", "mean_temperature", "min_temperature", "precipitation", "et0", "wind_speed", "wind_gusts"]:
                             if num_col in df_daily.columns:
                                 df_daily[num_col] = pd.to_numeric(df_daily[num_col], errors="coerce").round(1)
 
                         st.markdown("---")
-                        st.markdown("### 📈 Day-Wise Weather & Climate Trajectory")
-                        st.caption("Daily satellite forecast showing temperature variations, rain intensity, and dry spell trends.")
+                        st.markdown("### 📈 Day-Wise Weather Forecast")
 
-                        chart_col1, chart_col2 = st.columns(2)
-                        with chart_col1:
-                            st.markdown("##### 🌡️ Daily Temperatures (°C)")
-                            temp_plot_df = df_daily.set_index("Date_Str")[["max_temperature", "mean_temperature", "min_temperature"]].rename(
-                                columns={
-                                    "max_temperature": "Max Temp (°C)",
-                                    "mean_temperature": "Mean Temp (°C)",
-                                    "min_temperature": "Min Temp (°C)"
-                                }
+                        # ── Date range selector ──
+                        min_date = df_daily["Date"].min().date()
+                        max_date = df_daily["Date"].max().date()
+                        total_days = (max_date - min_date).days + 1
+
+                        flt_col1, flt_col2 = st.columns([1, 1])
+                        with flt_col1:
+                            range_start = st.date_input(
+                                "📅 Chart Start Date",
+                                value=min_date,
+                                min_value=min_date,
+                                max_value=max_date,
+                                key="cl_chart_start"
                             )
-                            st.line_chart(temp_plot_df, color=["#DC2626", "#F59E0B", "#3B82F6"])
+                        with flt_col2:
+                            days_remaining = (max_date - range_start).days + 1
+                            num_days = st.slider(
+                                "📆 Number of Days to Show",
+                                min_value=1,
+                                max_value=days_remaining,
+                                value=min(7, days_remaining),
+                                key="cl_chart_days"
+                            )
 
-                        with chart_col2:
-                            st.markdown("##### 🌧️ Daily Rainfall & Evapotranspiration (mm)")
-                            rain_cols = []
-                            if "precipitation" in df_daily.columns:
-                                rain_cols.append("precipitation")
-                            if "et0" in df_daily.columns:
-                                rain_cols.append("et0")
-                            
-                            if rain_cols:
-                                rain_plot_df = df_daily.set_index("Date_Str")[rain_cols].rename(
-                                    columns={
-                                        "precipitation": "Rainfall (mm)",
-                                        "et0": "ET0 Evaporation (mm)"
-                                    }
-                                )
-                                st.bar_chart(rain_plot_df, color=["#0284C7", "#10B981"][:len(rain_cols)])
+                        range_end = range_start + pd.Timedelta(days=num_days - 1)
+                        df_filtered = df_daily[
+                            (df_daily["Date"].dt.date >= range_start) &
+                            (df_daily["Date"].dt.date <= range_end)
+                        ].copy()
+                        df_filtered["Date_Str"] = df_filtered["Date"].dt.strftime("%d %b (%a)")
 
-                        with st.expander("📅 View Detailed Day-by-Day Weather Table", expanded=False):
-                            display_cols = ["Date_Str"]
-                            col_rename = {"Date_Str": "Forecast Date"}
-                            for col, new_name in [
-                                ("max_temperature", "Max Temp (°C)"),
-                                ("min_temperature", "Min Temp (°C)"),
-                                ("precipitation", "Rain (mm)"),
-                                ("wind_speed", "Wind (km/h)"),
-                                ("wind_gusts", "Max Gusts (km/h)"),
-                                ("et0", "ET0 (mm/day)")
-                            ]:
-                                if col in df_daily.columns:
-                                    display_cols.append(col)
-                                    col_rename[col] = new_name
-                            
-                            table_df = df_daily[display_cols].rename(columns=col_rename)
-                            st.dataframe(table_df, use_container_width=True, hide_index=True)
+                        st.caption(f"Showing forecast for **{range_start.strftime('%d %b')}** to **{range_end.strftime('%d %b %Y')}** ({num_days} days)")
+
+                        if df_filtered.empty:
+                            st.info("No forecast data available for the selected date range.")
+                        else:
+                            chart_col1, chart_col2 = st.columns(2)
+                            with chart_col1:
+                                st.markdown("##### 🌡️ Daily Temperatures (°C)")
+                                temp_cols = [c for c in ["max_temperature", "mean_temperature", "min_temperature"] if c in df_filtered.columns]
+                                if temp_cols:
+                                    temp_plot_df = df_filtered.set_index("Date_Str")[temp_cols].rename(
+                                        columns={"max_temperature": "Max Temp", "mean_temperature": "Mean Temp", "min_temperature": "Min Temp"}
+                                    )
+                                    st.line_chart(temp_plot_df, color=["#DC2626", "#F59E0B", "#3B82F6"][:len(temp_cols)])
+
+                            with chart_col2:
+                                st.markdown("##### 🌧️ Daily Rainfall & Soil Water Evaporation (mm)")
+                                st.caption("Soil Water Evaporation = How much water your soil loses to sun and heat each day")
+                                rain_cols = [c for c in ["precipitation", "et0"] if c in df_filtered.columns]
+                                if rain_cols:
+                                    rain_plot_df = df_filtered.set_index("Date_Str")[rain_cols].rename(
+                                        columns={"precipitation": "Rainfall (mm)", "et0": "Soil Water Evaporation (mm)"}
+                                    )
+                                    st.bar_chart(rain_plot_df, color=["#0284C7", "#10B981"][:len(rain_cols)])
+
+                            with st.expander("📅 View Day-by-Day Weather Details", expanded=False):
+                                display_cols = ["Date_Str"]
+                                col_rename = {"Date_Str": "Date"}
+                                for col, new_name in [
+                                    ("max_temperature", "Max Temp (°C)"),
+                                    ("min_temperature", "Min Temp (°C)"),
+                                    ("precipitation", "Rainfall (mm)"),
+                                    ("et0", "Soil Water Evap (mm)"),
+                                    ("wind_speed", "Wind (km/h)"),
+                                    ("wind_gusts", "Max Gusts (km/h)"),
+                                ]:
+                                    if col in df_filtered.columns:
+                                        display_cols.append(col)
+                                        col_rename[col] = new_name
+                                table_df = df_filtered[display_cols].rename(columns=col_rename)
+                                st.dataframe(table_df, use_container_width=True, hide_index=True)
                 except Exception as chart_err:
                     st.caption(f"Note: Could not render day-wise chart: {chart_err}")
 
