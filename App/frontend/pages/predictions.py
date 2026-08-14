@@ -322,8 +322,7 @@ def show_predictions():
             <div class="pred-card" style="border-left: 6px solid #0D9488; margin-top: 15px;">
                 <h4 style="margin: 0 0 10px 0; color: #0D9488 !important;">🛡️ Soil Texture &amp; Field Suitability</h4>
                 <div style="font-size: 0.95rem; line-height: 1.8;">
-                    📍 <strong>Farm Location:</strong> {loc_info.get('district', c_district)}, {loc_info.get('state', c_state)} 
-                    (Lat {loc_info.get('latitude', 0.0):.4f}°N, Lon {loc_info.get('longitude', 0.0):.4f}°E)<br>
+                    📍 <strong>Farm Location:</strong> {loc_info.get('district', c_district)}, {loc_info.get('state', c_state)}<br>
                     🧪 <strong>Identified Soil Texture:</strong> <strong style="color: #0D9488;">{texture_name}</strong> 
                     ({clay:.1f}% Clay, {sand:.1f}% Sand, {silt:.1f}% Silt).<br>
                     ✅ <strong>Why {pred_crop} is recommended:</strong> <strong>{pred_crop}</strong> root systems thrive in 
@@ -419,8 +418,14 @@ def show_predictions():
             c_c, c_d = st.columns(2)
             with c_c:
                 st.metric("Relative Humidity", humidity)
+            rain_7d_raw = res.get('rainfall_last_7_days', res.get('precipitation', 0.0)) if isinstance(res, dict) else 0.0
+            try:
+                rain_7d_disp = f"{float(rain_7d_raw):.1f}"
+            except Exception:
+                rain_7d_disp = "0.0"
+
             with c_d:
-                st.metric("7-Day Rain Total", f"{res.get('rainfall_last_7_days', res.get('precipitation', '0.0'))} mm" if isinstance(res, dict) else "N/A")
+                st.metric("7-Day Rain Total", f"{rain_7d_disp} mm")
 
             # =========================================================
             # DAY-WISE WEATHER RISK CHARTS
@@ -432,6 +437,11 @@ def show_predictions():
                     if not df_daily.empty and "Date" in df_daily.columns:
                         df_daily["Date_Str"] = pd.to_datetime(df_daily["Date"]).dt.strftime("%d %b (%a)")
                         
+                        # Round weather and rainfall numbers to clean 1-decimal values
+                        for num_col in ["max_temperature", "mean_temperature", "min_temperature", "precipitation", "et0", "wind_speed", "wind_gusts"]:
+                            if num_col in df_daily.columns:
+                                df_daily[num_col] = pd.to_numeric(df_daily[num_col], errors="coerce").round(1)
+
                         st.markdown("---")
                         st.markdown("### 📈 Day-Wise Weather & Climate Trajectory")
                         st.caption("Daily satellite forecast showing temperature variations, rain intensity, and dry spell trends.")

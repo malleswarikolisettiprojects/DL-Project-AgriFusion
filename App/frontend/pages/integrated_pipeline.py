@@ -344,7 +344,6 @@ def show_integrated_pipeline():
             st.markdown(f"""
             <div style="background-color: rgba(13,148,136,0.08); border-left: 4px solid #0D9488; padding: 12px 16px; border-radius: 8px; margin-top: 10px; font-size: 0.92rem;">
                 <strong>🧪 Identified Texture:</strong> <strong style="color: #0D9488;">{texture_name}</strong> ({clay:.1f}% Clay, {sand:.1f}% Sand, {silt:.1f}% Silt)<br>
-                <strong>🌍 Satellite Coordinates:</strong> Lat {loc_info.get('latitude', 0.0):.4f}°N, Lon {loc_info.get('longitude', 0.0):.4f}°E<br>
                 <strong>💡 Agronomic Suitability:</strong> <strong>{rec_crop}</strong> is ranked #1 because its root structure excels in <strong>{texture_name}</strong> soil under local climate conditions.
             </div>
             """, unsafe_allow_html=True)
@@ -356,6 +355,10 @@ def show_integrated_pipeline():
                 df_daily = pd.DataFrame(daily_data).copy()
                 if not df_daily.empty and "Date" in df_daily.columns:
                     df_daily["Date_Str"] = pd.to_datetime(df_daily["Date"]).dt.strftime("%d %b (%a)")
+                    for num_col in ["max_temperature", "mean_temperature", "min_temperature", "precipitation", "et0"]:
+                        if num_col in df_daily.columns:
+                            df_daily[num_col] = pd.to_numeric(df_daily[num_col], errors="coerce").round(1)
+
                     with st.expander("📈 View Day-Wise Satellite Weather Forecast Charts", expanded=False):
                         d_col1, d_col2 = st.columns(2)
                         with d_col1:
