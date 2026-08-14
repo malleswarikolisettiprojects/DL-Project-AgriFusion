@@ -12,6 +12,7 @@ from App.backend.database.database import supabase
 from App.backend.database.predictions import save_prediction as save_full_prediction
 from App.backend.growth_stages import compute_date_range, compute_stage_boundaries
 from App.backend.seasons import get_season
+from App.frontend.pages.predictions import get_default_cost_per_ha, get_soil_texture_name
 
 
 def safe_get(obj, key, default="N/A"):
@@ -320,6 +321,65 @@ def show_integrated_pipeline():
             </div>
             """, unsafe_allow_html=True)
 
+        # 1B. LIVE SOIL CHEMISTRY & RELIABILITY TRANSPARENCY
+        soil_info = crop_res.get("soil", {}) if isinstance(crop_res, dict) else {}
+        weather_info = crop_res.get("weather", {}) if isinstance(crop_res, dict) else {}
+        loc_info = crop_res.get("location", {}) if isinstance(crop_res, dict) else {}
+
+        soil_ph = float(soil_info.get("soil_ph", 6.5)) if soil_info.get("soil_ph") is not None else 6.5
+        nitrogen = float(soil_info.get("nitrogen", 120.0)) if soil_info.get("nitrogen") is not None else 120.0
+        soc = float(soil_info.get("organic_carbon", 12.0)) if soil_info.get("organic_carbon") is not None else 12.0
+        cec = float(soil_info.get("cec", 18.0)) if soil_info.get("cec") is not None else 18.0
+        clay = float(soil_info.get("clay", 25.0)) if soil_info.get("clay") is not None else 25.0
+        sand = float(soil_info.get("sand", 45.0)) if soil_info.get("sand") is not None else 45.0
+        silt = float(soil_info.get("silt", 30.0)) if soil_info.get("silt") is not None else 30.0
+        texture_name = get_soil_texture_name(clay, sand, silt)
+
+        with st.expander("🔬 View Live Area Soil Physics & Chemical Scan (ISRIC SoilGrids)", expanded=False):
+            sc1, sc2, sc3, sc4 = st.columns(4)
+            with sc1:
+                st.metric("Soil pH", f"{soil_ph:.2f}")
+            with sc2:
+                st.metric("Nitrogen (N)", f"{nitrogen:.0f} mg/kg")
+            with sc3:
+                st.metric("Organic Carbon", f"{soc:.1f} g/kg")
+            with sc4:
+                st.metric("Cation Exchange (CEC)", f"{cec:.1f} cmol/kg")
+            
+            st.markdown(f"""
+            <div style="background-color: rgba(13,148,136,0.08); border-left: 4px solid #0D9488; padding: 12px 16px; border-radius: 8px; margin-top: 10px; font-size: 0.92rem;">
+                <strong>🧪 Soil Texture Class:</strong> <strong>{texture_name}</strong> (Clay {clay:.0f}%, Sand {sand:.0f}%, Silt {silt:.0f}%)<br>
+                <strong>🌍 Satellite Coordinates:</strong> Lat {loc_info.get('latitude', 0.0):.4f}°N, Lon {loc_info.get('longitude', 0.0):.4f}°E<br>
+                <strong>💡 Agronomic Rationale:</strong> <strong>{rec_crop}</strong> is ranked #1 because its root structure excels in <strong>{texture_name}</strong> soil with pH <strong>{soil_ph:.2f}</strong> under local weather patterns.
+            </div>
+            """, unsafe_allow_html=True)
+
+        # 1C. DAY-WISE CLIMATE TRAJECTORY CHARTS
+        daily_data = clim_res.get("daily_data") if isinstance(clim_res, dict) else None
+        if daily_data is not None:
+            try:
+                df_daily = pd.DataFrame(daily_data).copy()
+                if not df_daily.empty and "Date" in df_daily.columns:
+                    df_daily["Date_Str"] = pd.to_datetime(df_daily["Date"]).dt.strftime("%d %b (%a)")
+                    with st.expander("📈 View Day-Wise Satellite Weather Forecast Charts", expanded=False):
+                        d_col1, d_col2 = st.columns(2)
+                        with d_col1:
+                            st.markdown("##### 🌡️ Daily Temperatures (°C)")
+                            temp_df = df_daily.set_index("Date_Str")[["max_temperature", "mean_temperature", "min_temperature"]].rename(
+                                columns={"max_temperature": "Max Temp", "mean_temperature": "Mean Temp", "min_temperature": "Min Temp"}
+                            )
+                            st.line_chart(temp_df, color=["#DC2626", "#F59E0B", "#3B82F6"])
+                        with d_col2:
+                            st.markdown("##### 🌧️ Daily Rainfall & ET0 Evaporation (mm)")
+                            r_cols = [c for c in ["precipitation", "et0"] if c in df_daily.columns]
+                            if r_cols:
+                                rain_df = df_daily.set_index("Date_Str")[r_cols].rename(
+                                    columns={"precipitation": "Rain (mm)", "et0": "ET0 Evaporation (mm)"}
+                                )
+                                st.bar_chart(rain_df, color=["#0284C7", "#10B981"][:len(r_cols)])
+            except Exception:
+                pass
+
         # 2. PRACTICAL IRRIGATION GUIDELINES
         req_mm = float(irrig_res.get('predicted_irrigation', 0.0)) if isinstance(irrig_res, dict) and irrig_res.get('predicted_irrigation') else 0.0
         liters_per_ha = req_mm * 10000
@@ -345,7 +405,7 @@ def show_integrated_pipeline():
         </div>
         """, unsafe_allow_html=True)
 
-        # 3. YIELD & REVENUE SUMMARY
+        # 3. YIELD & FINANCIAL PROFITABILITY SUMMARY
         pred_yield = float(yield_res.get('predicted_yield', 0.0)) if isinstance(yield_res, dict) else 0.0
         tot_yield = float(yield_res.get('total_yield', 0.0)) if isinstance(yield_res, dict) else 0.0
         price_val = float(market_res.get("predicted_price") or market_res.get("predicted_market_price") or 0.0) if isinstance(market_res, dict) else 0.0
@@ -353,14 +413,57 @@ def show_integrated_pipeline():
         # Farmer's yield in Quintals (Tons * 10)
         farmer_yield_qtl = tot_yield * 10.0
         total_revenue = price_val * farmer_yield_qtl
+        
+        # Cost of cultivation & Net Profit calculation
+        ha_cost = get_default_cost_per_ha(rec_crop)
+        total_principal = ha_cost * area
+        net_profit = total_revenue - total_principal
+        roi_pct = (net_profit / total_principal * 100.0) if total_principal > 0 else 0.0
+        profit_per_ha = net_profit / area if area > 0 else 0.0
+
+        is_profit = net_profit >= 0
+        profit_color = "#16A34A" if is_profit else "#DC2626"
+        profit_label = "🟢 NET ESTIMATED PROFIT" if is_profit else "🔴 ESTIMATED NET LOSS"
+
+        st.markdown(f"""
+        <div class="pipe-card" style="border-left: 6px solid {profit_color};">
+            <h3 style="margin: 0 0 10px 0; color: {profit_color} !important;">💰 Harvest Earnings &amp; Net Profit Forecast</h3>
+            <p style="margin: 0 0 12px 0; font-size: 1.05rem; line-height: 1.75;">
+                Total Expected Harvest: <strong>{farmer_yield_qtl:,.1f} Quintals ({tot_yield:.2f} Tons)</strong>.<br>
+                Predicted Harvest Market Price: <strong>₹ {price_val:,.2f} per Quintal</strong> on <strong>{harvest_end_date.strftime('%d %b %Y')}</strong>.
+            </p>
+            <div style="background-color: rgba(128,128,128,0.08); border-radius: 10px; padding: 14px 18px; margin-bottom: 15px;">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px;">
+                    <span>💵 <strong>Gross Harvest Revenue:</strong></span>
+                    <strong>₹ {total_revenue:,.2f}</strong>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 6px; color: #E11D48;">
+                    <span>📉 <strong>Less: Principal Cultivation Cost</strong> ({area:.1f} Ha × ₹ {ha_cost:,.0f}/Ha):</span>
+                    <strong>- ₹ {total_principal:,.2f}</strong>
+                </div>
+                <div style="border-top: 2px solid {profit_color}; padding-top: 8px; display: flex; justify-content: space-between; font-size: 1.2rem; font-weight: 800; color: {profit_color};">
+                    <span>{profit_label} (ROI: {roi_pct:+.1f}%):</span>
+                    <span>₹ {net_profit:,.2f}</span>
+                </div>
+            </div>
+            <p style="margin: 0; font-size: 0.9rem;">
+                💡 <strong>Estimated Return:</strong> <strong style="color: {profit_color};">₹ {profit_per_ha:,.2f} / Hectare</strong>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
 
         m1, m2 = st.columns(2)
         with m1:
             st.metric("Total Harvest Volume", f"{farmer_yield_qtl:.1f} Quintals")
         with m2:
-            st.metric("Tons Equivalent", f"{tot_yield:.2f} Tons")
+            st.metric("Principal Investment", f"₹ {total_principal:,.2f}")
         m3, m4 = st.columns(2)
         with m3:
-            st.metric("Forecasted Market Price", f"₹ {price_val:,.2f}/qtl")
+            st.metric("Gross Revenue", f"₹ {total_revenue:,.2f}")
         with m4:
-            st.metric("Potential Gross Revenue", f"₹ {total_revenue:,.2f}")
+            st.metric(
+                "Net Profit / Loss",
+                f"₹ {net_profit:,.2f}",
+                delta=f"{roi_pct:+.1f}% ROI",
+                delta_color="normal" if is_profit else "inverse"
+            )

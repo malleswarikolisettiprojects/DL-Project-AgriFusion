@@ -433,4 +433,5 @@ def predict_climate_risk(data):
         "state": location["state"],
         "latitude": latitude,
         "longitude": longitude,
+        "daily_data": weather.get("daily_data"),
     }
