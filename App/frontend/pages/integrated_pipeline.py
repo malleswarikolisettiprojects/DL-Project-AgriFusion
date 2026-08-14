@@ -321,30 +321,33 @@ def show_integrated_pipeline():
             </div>
             """, unsafe_allow_html=True)
 
-        # 1B. LIVE SOIL TEXTURE VERIFICATION
+        # 1B. LIVE SOIL TEXTURE & NUTRIENT PROFILE
         soil_info = crop_res.get("soil", {}) if isinstance(crop_res, dict) else {}
         loc_info = crop_res.get("location", {}) if isinstance(crop_res, dict) else {}
 
+        nitrogen = float(soil_info.get("nitrogen", 120.0)) if soil_info.get("nitrogen") is not None else 120.0
+        soc = float(soil_info.get("organic_carbon", 12.0)) if soil_info.get("organic_carbon") is not None else 12.0
+        cec = float(soil_info.get("cec", 18.0)) if soil_info.get("cec") is not None else 18.0
         clay = float(soil_info.get("clay", 25.0)) if soil_info.get("clay") is not None else 25.0
         sand = float(soil_info.get("sand", 45.0)) if soil_info.get("sand") is not None else 45.0
         silt = float(soil_info.get("silt", 30.0)) if soil_info.get("silt") is not None else 30.0
         texture_name = get_soil_texture_name(clay, sand, silt)
 
-        with st.expander("🌾 View Farm Soil Texture Profile (ISRIC SoilGrids Scan)", expanded=False):
+        with st.expander("🌾 View Farm Soil Texture & Nutrient Scan (ISRIC SoilGrids)", expanded=False):
             sc1, sc2, sc3, sc4 = st.columns([1.5, 1, 1, 1])
             with sc1:
-                st.metric("Soil Texture Class", texture_name)
+                st.metric("Soil Texture", texture_name)
             with sc2:
-                st.metric("Clay Content", f"{clay:.1f} %")
+                st.metric("Nitrogen (N)", f"{nitrogen:.0f} mg/kg")
             with sc3:
-                st.metric("Sand Content", f"{sand:.1f} %")
+                st.metric("Organic Carbon", f"{soc:.1f} g/kg")
             with sc4:
-                st.metric("Silt Content", f"{silt:.1f} %")
+                st.metric("Cation Exchange", f"{cec:.1f} cmol/kg")
             
             st.markdown(f"""
             <div style="background-color: rgba(13,148,136,0.08); border-left: 4px solid #0D9488; padding: 12px 16px; border-radius: 8px; margin-top: 10px; font-size: 0.92rem;">
                 <strong>🧪 Identified Texture:</strong> <strong style="color: #0D9488;">{texture_name}</strong> ({clay:.1f}% Clay, {sand:.1f}% Sand, {silt:.1f}% Silt)<br>
-                <strong>💡 Agronomic Suitability:</strong> <strong>{rec_crop}</strong> is ranked #1 because its root structure excels in <strong>{texture_name}</strong> soil under local climate conditions.
+                <strong>💡 Agronomic Suitability:</strong> <strong>{rec_crop}</strong> is ranked #1 because its root structure thrives in <strong>{texture_name}</strong> soil with high Organic Carbon (<strong>{soc:.1f} g/kg</strong>) under local climate conditions.
             </div>
             """, unsafe_allow_html=True)
 
