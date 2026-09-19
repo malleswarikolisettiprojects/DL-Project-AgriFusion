@@ -59,17 +59,14 @@ app = FastAPI(
 )
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-# Use an exact origin from the environment, not a wildcard with credentials.
-# For a Streamlit-first deployment, CORS may not be needed at all.
-_allowed_origins = [FRONTEND_URL] if FRONTEND_URL else []
-if _allowed_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_allowed_origins,
-        allow_credentials=False,
-        allow_methods=["GET", "POST"],
-        allow_headers=["Content-Type", "X-User-Email"],
-    )
+_allowed_origins = [FRONTEND_URL] if FRONTEND_URL else ["*"]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 # Pydantic Schemas
