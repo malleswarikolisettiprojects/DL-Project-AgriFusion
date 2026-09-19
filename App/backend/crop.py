@@ -136,7 +136,15 @@ def predict_crop(input_data):
 
     district = input_data["district"]
 
-    season = input_data["season"]
+    season = input_data.get("season")
+    if not season and "start_date" in input_data:
+        try:
+            from App.backend.seasons import get_season
+            season = get_season(input_data["start_date"])
+        except Exception:
+            season = "Kharif"
+    if not season:
+        season = "Kharif"
 
 
     try:

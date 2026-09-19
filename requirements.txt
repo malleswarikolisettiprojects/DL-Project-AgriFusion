@@ -1,14 +1,55 @@
+# AgriFusion — Python Dependencies
+# =================================
+# Run: pip install -r requirements.txt
+
+# ── Streamlit & Web Framework ─────────────────────────────────────────────
 streamlit>=1.31.0
+
+# ── Data Science & ML ─────────────────────────────────────────────────────
 pandas>=2.0.0
 numpy>=1.24.0
 scikit-learn==1.7.2
 joblib>=1.3.0
+
+# ── HTTP & API Clients ────────────────────────────────────────────────────
 requests>=2.31.0
+httpx>=0.24.0
+
+# ── Configuration ─────────────────────────────────────────────────────────
 python-dotenv>=1.0.0
+
+# ── Database & Auth ───────────────────────────────────────────────────────
 supabase>=2.0.0
+bcrypt>=4.0.0
+
+# ── FastAPI Backend ───────────────────────────────────────────────────────
+fastapi>=0.100.0
+uvicorn>=0.20.0
 pydantic>=2.0.0
+python-multipart>=0.0.6
+
+# ── Disease Detection & Computer Vision ───────────────────────────────────
+pillow>=10.0.0
+ultralytics>=8.0.0        # Optional: local YOLO inference. App runs without it.
+huggingface-hub>=0.20.0
+
+# ── Geo / Location ────────────────────────────────────────────────────────
 geopy>=2.4.0
+
+# ── Weather ───────────────────────────────────────────────────────────────
 openmeteo-requests>=1.1.0
 requests-cache>=1.1.0
 retry-requests>=2.0.0
+
+# ── RAG Document Parsing ──────────────────────────────────────────────────
+pypdf>=3.0.0              # PDF text extraction
+python-docx>=1.0.0        # DOCX text extraction
+
+# ── Geospatial (optional — used in api/soil.py via SoilGrids REST) ────────
+# rasterio requires GDAL system libraries.
+# On Render: uncomment only if a GDAL build pack is configured.
+# On local: install with: pip install rasterio>=1.3.0
 rasterio>=1.3.0
+
+# ── Testing ───────────────────────────────────────────────────────────────
+# pytest>=7.0.0    # Uncomment to include in build (not needed at runtime)

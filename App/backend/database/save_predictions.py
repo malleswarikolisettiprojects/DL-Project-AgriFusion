@@ -201,3 +201,37 @@ def save_market_prediction(data):
     except Exception as e:
         print(f"Warning: Could not save market prediction to Supabase: {e}")
         return None
+
+
+# ============================================================
+# 6. SAVE DISEASE / PEST / NUTRIENT DETECTION RESULT
+# ============================================================
+
+def save_disease_prediction(data):
+    """
+    Save disease, pest or nutrient deficiency detection result.
+    Only stores the prediction outcome — NOT remedies, RAG output, or scheme recommendations.
+    """
+    try:
+        response = (
+            supabase
+            .table("disease_prediction")
+            .insert({
+                "user_email":              data.get("user_email"),
+                "crop":                    data.get("crop"),
+                "top_disease":             data.get("top_disease"),
+                "top_disease_confidence":  data.get("top_disease_confidence"),
+                "top_pest":                data.get("top_pest"),
+                "top_pest_confidence":     data.get("top_pest_confidence"),
+                "top_nutrient":            data.get("top_nutrient"),
+                "top_nutrient_confidence": data.get("top_nutrient_confidence"),
+                "annotated_image_url":     data.get("annotated_image_url"),
+                "all_detections":          data.get("all_detections"),   # JSON list of {label, confidence}
+                "custom_crop_notice":      data.get("custom_crop_notice"),
+            })
+            .execute()
+        )
+        return response
+    except Exception as e:
+        print(f"Warning: Could not save disease prediction to Supabase: {e}")
+        return None

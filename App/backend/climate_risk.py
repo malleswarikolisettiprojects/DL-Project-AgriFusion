@@ -69,11 +69,19 @@ def predict_climate_risk(data):
     # 2. GET FUTURE WEATHER
     # =====================================================
 
+    start_date = data.get("start_date")
+    end_date = data.get("end_date")
+    if not start_date or not end_date:
+        from App.backend.growth_stages import compute_date_range
+        def_start, def_end, _ = compute_date_range(start_date)
+        start_date = start_date or str(def_start)
+        end_date = end_date or str(def_end)
+
     weather = get_future_weather(
         latitude=latitude,
         longitude=longitude,
-        start_date=data["start_date"],
-        end_date=data["end_date"]
+        start_date=start_date,
+        end_date=end_date
     )
 
     print("\nWEATHER:")
@@ -134,19 +142,19 @@ def predict_climate_risk(data):
         data.get("crop")
     )
 
-    season = data.get(
-        "Season",
-        data.get("season")
-    )
+    season = data.get("Season", data.get("season"))
+    if not season and start_date:
+        try:
+            from App.backend.seasons import get_season
+            season = get_season(start_date)
+        except Exception:
+            season = "Kharif"
+    if not season:
+        season = "Kharif"
 
     if crop is None:
         raise ValueError(
             "Crop is required for climate prediction."
-        )
-
-    if season is None:
-        raise ValueError(
-            "Season is required for climate prediction."
         )
 
 
@@ -416,6 +424,7 @@ def predict_climate_risk(data):
     return {
         "predicted_climate_risk": predicted_climate_risk,
         "climate_risk": predicted_climate_risk,
+        "risk_category": str(predicted_climate_risk).title(),
         "temperature": weather["mean_temperature"],
         "relative_humidity": weather["relative_humidity"],
         "precipitation": weather["precipitation"],
@@ -433,5 +442,12 @@ def predict_climate_risk(data):
         "state": location["state"],
         "latitude": latitude,
         "longitude": longitude,
-        "daily_data": weather.get("daily_data"),
+        "daily_data": (
+            [
+                {k: (str(v) if hasattr(v, "isoformat") or type(v).__name__ == "Timestamp" else v) for k, v in row.items()}
+                for row in weather.get("daily_data").to_dict(orient="records")
+            ]
+            if hasattr(weather.get("daily_data"), "to_dict")
+            else weather.get("daily_data")
+        ),
     }

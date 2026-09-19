@@ -1,23 +1,18 @@
 import os
-from dotenv import load_dotenv
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 
-# Load local .env if present
-env_file = BASE_DIR / ".env"
-if env_file.exists():
-    load_dotenv(env_file)
-
-def _get_secret(key: str, default: str = None) -> str:
+# Optional dev-only .env loading (production reads from os.environ directly)
+_env_file = BASE_DIR / ".env"
+if _env_file.exists():
     try:
-        import streamlit as st
-        if hasattr(st, "secrets") and key in st.secrets:
-            return str(st.secrets[key]).strip()
-    except Exception:
+        from dotenv import load_dotenv
+        load_dotenv(_env_file, override=False)
+    except ImportError:
         pass
-    val = os.getenv(key, default)
-    return str(val).strip() if val is not None else default
 
-SUPABASE_URL = _get_secret("SUPABASE_URL", "https://xeuaiuomugigagktsybn.supabase.co")
-SUPABASE_KEY = _get_secret("SUPABASE_KEY")
+# Import from central settings — no hardcoded fallback values
+from App.backend.settings import SUPABASE_URL, SUPABASE_KEY
+
+__all__ = ["SUPABASE_URL", "SUPABASE_KEY"]

@@ -97,8 +97,14 @@ else:
 
 def predict_irrigation(
     input_data,
-    climate_result
+    climate_result=None
 ):
+    if climate_result is None:
+        try:
+            from App.backend.climate_risk import predict_climate_risk
+            climate_result = predict_climate_risk(input_data)
+        except Exception:
+            climate_result = {"predicted_climate_risk": "low"}
 
     """
     Predict irrigation requirement.
@@ -216,10 +222,7 @@ def predict_irrigation(
     # =====================================================
 
     if not season:
-
-        raise ValueError(
-            "Season is required."
-        )
+        season = "Kharif"
 
 
     if root_depth_m <= 0:

@@ -1,146 +1,271 @@
-import sqlite3
-import hashlib
-import os
-from pathlib import Path
-from App.backend.database.database import supabase
+"""
+AgriFusion — Authentication & User Management
+==============================================
+Security contract:
+  * Passwords are hashed with bcrypt (work factor 12).
+  * SHA-256 is no longer used.
+  * Admin credentials come exclusively from environment variables.
+    There are NO default username or password values.
+  * Supabase is tried first; SQLite is used as a fallback.
+  * Database errors and internal exceptions are never exposed to callers.
+"""
 
-# Paths
+import sqlite3
+from pathlib import Path
+from typing import Optional, Union
+
+# ──────────────────────────────────────────────────────────────────────────────
+# bcrypt — required for password hashing
+# ──────────────────────────────────────────────────────────────────────────────
+try:
+    import bcrypt
+    _BCRYPT_OK = True
+except ImportError:
+    _BCRYPT_OK = False
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Paths & Supabase
+# ──────────────────────────────────────────────────────────────────────────────
 BASE_DIR = Path(__file__).resolve().parents[2]
 DATA_DIR = BASE_DIR / "Data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "users.db"
 
-# Admin credentials
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "admin123")
+from App.backend.settings import ADMIN_USERNAME, ADMIN_PASSWORD, create_supabase_client
 
-def get_db_connection():
+_supabase = None  # initialised lazily to avoid crashing at import time
+
+
+def _get_supabase():
+    global _supabase
+    if _supabase is None:
+        _supabase = create_supabase_client()
+    return _supabase
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SQLite helpers
+# ──────────────────────────────────────────────────────────────────────────────
+def _get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+
 def init_db():
-    conn = get_db_connection()
+    conn = _get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            name TEXT NOT NULL,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL,
+            id       INTEGER PRIMARY KEY AUTOINCREMENT,
+            name     TEXT    NOT NULL,
+            email    TEXT    UNIQUE NOT NULL,
+            password TEXT    NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
     conn.commit()
     conn.close()
 
-def hash_password(password: str) -> str:
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Password hashing (bcrypt)
+# ──────────────────────────────────────────────────────────────────────────────
+def hash_password(password: str) -> str:
+    """Hash a plain-text password with bcrypt (work factor 12)."""
+    if not _BCRYPT_OK:
+        raise RuntimeError(
+            "bcrypt is not installed. Add 'bcrypt>=4.0.0' to requirements.txt."
+        )
+    salt = bcrypt.gensalt(rounds=12)
+    hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
+    return hashed.decode("utf-8")
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    """Verify a plain-text password against a bcrypt hash. Returns False on any error."""
+    if not _BCRYPT_OK:
+        return False
+    try:
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
+    except Exception:
+        return False
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Registration
+# ──────────────────────────────────────────────────────────────────────────────
 def register_user(name: str, email: str, password: str) -> tuple[bool, str]:
+    """
+    Register a new user in Supabase (primary) and SQLite (fallback/sync).
+    Returns (success: bool, message: str).
+    The message never contains internal error details.
+    """
     init_db()
     email_clean = email.strip().lower()
+
     if not name or not email_clean or not password:
         return False, "Please fill in all required fields (Name, Email, Password)."
-    
-    hashed_pwd = hash_password(password)
 
-    # 1. Store in Supabase 'users' table
+    if len(password) < 8:
+        return False, "Password must be at least 8 characters long."
+
+    try:
+        hashed_pwd = hash_password(password)
+    except RuntimeError as exc:
+        return False, str(exc)
+
+    # 1. Try Supabase
+    supabase = _get_supabase()
     supabase_success = False
-    try:
-        res = supabase.table("users").insert({
-            "name": name,
-            "email": email_clean,
-            "password": hashed_pwd
-        }).execute()
-        if res.data:
-            supabase_success = True
-    except Exception as e:
-        print(f"[Supabase Register Note]: {e}")
+    if supabase is not None:
+        try:
+            res = supabase.table("users").insert({
+                "name": name,
+                "email": email_clean,
+                "password": hashed_pwd,
+            }).execute()
+            if res.data:
+                supabase_success = True
+        except Exception:
+            pass  # Silently fall through to SQLite
 
-    # 2. Store in local SQLite as backup/sync
+    # 2. SQLite fallback / sync
     try:
-        conn = get_db_connection()
+        conn = _get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO users (name, email, password)
-            VALUES (?, ?, ?)
-        """, (name, email_clean, hashed_pwd))
+        cursor.execute(
+            "INSERT INTO users (name, email, password) VALUES (?, ?, ?)",
+            (name, email_clean, hashed_pwd),
+        )
         conn.commit()
         conn.close()
-        return True, "Registration successful! User details saved into Supabase. You can now log in."
+        return True, "Registration successful. You can now log in."
     except sqlite3.IntegrityError:
         if supabase_success:
-            return True, "Registration successful! You can now log in."
+            return True, "Registration successful. You can now log in."
         return False, "An account with this email already exists."
-    except Exception as e:
+    except Exception:
         if supabase_success:
-            return True, "Registration successful! You can now log in."
-        return False, f"Registration error: {str(e)}"
+            return True, "Registration successful. You can now log in."
+        return False, "Registration failed. Please try again later."
 
-def login_user(email: str, password: str) -> tuple[bool, dict | str]:
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Login
+# ──────────────────────────────────────────────────────────────────────────────
+def login_user(
+    email: str, password: str
+) -> tuple[bool, Union[dict, str]]:
+    """
+    Authenticate a user.
+    Returns (True, user_dict) on success or (False, error_message) on failure.
+    Error messages never expose database internals.
+    """
     init_db()
     email_clean = email.strip().lower()
-    hashed_pwd = hash_password(password)
-    
-    # 1. Try Supabase login first
-    try:
-        res = supabase.table("users").select("*").eq("email", email_clean).eq("password", hashed_pwd).execute()
-        if res.data and len(res.data) > 0:
-            user = res.data[0]
-            return True, {
-                "id": user.get("id"),
-                "name": user.get("name"),
-                "email": user.get("email")
-            }
-    except Exception as e:
-        print(f"[Supabase Login Fallback]: {e}")
 
-    # 2. Fallback to local SQLite DB
+    # 1. Try Supabase
+    supabase = _get_supabase()
+    if supabase is not None:
+        try:
+            res = (
+                supabase.table("users")
+                .select("id, name, email, password")
+                .eq("email", email_clean)
+                .execute()
+            )
+            if res.data:
+                user = res.data[0]
+                if verify_password(password, user.get("password", "")):
+                    return True, {
+                        "id": user.get("id"),
+                        "name": user.get("name"),
+                        "email": user.get("email"),
+                    }
+                return False, "Invalid email or password."
+        except Exception:
+            pass  # Fall through to SQLite
+
+    # 2. SQLite fallback
     try:
-        conn = get_db_connection()
+        conn = _get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM users WHERE email = ? AND password = ?", (email_clean, hashed_pwd))
+        cursor.execute(
+            "SELECT id, name, email, password FROM users WHERE email = ?",
+            (email_clean,),
+        )
         user = cursor.fetchone()
         conn.close()
-        
-        if user:
+
+        if user and verify_password(password, user["password"]):
             return True, {
                 "id": user["id"],
                 "name": user["name"],
-                "email": user["email"]
+                "email": user["email"],
             }
-        else:
-            return False, "Invalid email or password."
-    except Exception as e:
-        return False, f"Login error: {str(e)}"
+        return False, "Invalid email or password."
+    except Exception:
+        return False, "Login is temporarily unavailable. Please try again later."
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Admin verification
+# ──────────────────────────────────────────────────────────────────────────────
 def verify_admin(username: str, password: str) -> bool:
-    return username.strip() == ADMIN_USERNAME and password == ADMIN_PASSWORD
+    """
+    Verify admin credentials against environment variables only.
+    Returns False if ADMIN_USERNAME or ADMIN_PASSWORD are not configured.
+    Never falls back to any default credential.
+    """
+    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
+        return False  # Admin login is disabled if env vars are absent
+    return (
+        username.strip() == ADMIN_USERNAME
+        and password == ADMIN_PASSWORD
+    )
 
-# Supabase database reader for Admin Dashboard
-def fetch_all_supabase_predictions():
-    """Fetch stored prediction records and user list from Supabase tables."""
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Admin — Supabase prediction reader
+# ──────────────────────────────────────────────────────────────────────────────
+def fetch_all_supabase_predictions() -> dict:
+    """
+    Fetch stored prediction records from Supabase tables.
+    Returns empty lists if Supabase is not configured or a table does not exist.
+    """
     tables = [
-        ("Registered Users", "users"),
-        ("Crop Predictions", "crop_prediction"),
-        ("Irrigation Predictions", "irrigation_prediction"),
-        ("Climate Risk Predictions", "climate_prediction"),
-        ("Yield Predictions", "yield_prediction"),
-        ("Unified Connected Predictions", "predictions")
+        ("Registered Users",            "users"),
+        ("Crop Predictions",            "crop_prediction"),
+        ("Irrigation Predictions",      "irrigation_prediction"),
+        ("Climate Risk Predictions",    "climate_prediction"),
+        ("Yield Predictions",           "yield_prediction"),
+        ("Market Price Predictions",    "market_prediction"),
+        ("Disease & Pest Detections",   "disease_prediction"),
+        ("Unified Connected Predictions", "predictions"),
     ]
-    
-    results = {}
-    
+
+    supabase = _get_supabase()
+    results: dict = {}
+
+    if supabase is None:
+        return {display: [] for display, _ in tables}
+
     for display_name, table_name in tables:
         try:
-            response = supabase.table(table_name).select("*").order("id", desc=True).limit(100).execute()
-            results[display_name] = response.data if response.data else []
+            response = (
+                supabase.table(table_name)
+                .select("*")
+                .order("id", desc=True)
+                .limit(100)
+                .execute()
+            )
+            results[display_name] = response.data or []
         except Exception:
             try:
                 response = supabase.table(table_name).select("*").limit(100).execute()
-                results[display_name] = response.data if response.data else []
+                results[display_name] = response.data or []
             except Exception:
                 results[display_name] = []
-                
+
     return results
