@@ -1,8 +1,13 @@
 import time
 from io import BytesIO
 
-import numpy as np
-import rasterio
+try:
+    import rasterio
+    _RASTERIO_OK = True
+except ImportError:
+    _RASTERIO_OK = False
+    rasterio = None  # type: ignore
+
 import requests
 
 # Reuses the existing Open-Meteo based geocoder already in this
@@ -182,6 +187,8 @@ def estimate_potassium(cec, clay):
 # ============================================================
 
 def get_soil_value(latitude, longitude, property_name):
+    if not _RASTERIO_OK:
+        raise ValueError("rasterio is not installed")
     config = SOIL_PROPERTIES[property_name]
     map_name, coverage, scale = config["map"], config["coverage"], config["scale"]
 

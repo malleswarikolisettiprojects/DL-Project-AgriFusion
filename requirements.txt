@@ -30,7 +30,7 @@ python-multipart>=0.0.6
 
 # ── Disease Detection & Computer Vision ───────────────────────────────────
 pillow>=10.0.0
-ultralytics>=8.0.0        # Optional: local YOLO inference. App runs without it.
+# ultralytics>=8.0.0       # Disabled on Render to keep memory under 512MB limit (HF API / Roboflow API fallbacks used)
 huggingface-hub>=0.20.0
 
 # ── Geo / Location ────────────────────────────────────────────────────────
@@ -46,10 +46,7 @@ pypdf>=3.0.0              # PDF text extraction
 python-docx>=1.0.0        # DOCX text extraction
 
 # ── Geospatial (optional — used in api/soil.py via SoilGrids REST) ────────
-# rasterio requires GDAL system libraries.
-# On Render: uncomment only if a GDAL build pack is configured.
-# On local: install with: pip install rasterio>=1.3.0
-rasterio>=1.3.0
+# rasterio>=1.3.0          # Disabled on Render to avoid GDAL C-library build errors
 
 # ── Testing ───────────────────────────────────────────────────────────────
 # pytest>=7.0.0    # Uncomment to include in build (not needed at runtime)
