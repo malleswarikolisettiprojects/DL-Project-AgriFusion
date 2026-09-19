@@ -20,16 +20,18 @@ CLIMATE_DIR = BASE_DIR / "pickles" / "climate"
 
 
 # =========================================================
-# LOAD MODEL AND ENCODERS
+# LAZY MODEL AND ENCODER LOADING
 # =========================================================
 
-model = joblib.load(
-    CLIMATE_DIR / "model.pkl"
-)
+_CLIMATE_MODEL = None
+_CLIMATE_ENCODERS = None
 
-encoders = joblib.load(
-    CLIMATE_DIR / "encoder.pkl"
-)
+def get_climate_artifacts():
+    global _CLIMATE_MODEL, _CLIMATE_ENCODERS
+    if _CLIMATE_MODEL is None or _CLIMATE_ENCODERS is None:
+        _CLIMATE_MODEL = joblib.load(CLIMATE_DIR / "model.pkl")
+        _CLIMATE_ENCODERS = joblib.load(CLIMATE_DIR / "encoder.pkl")
+    return _CLIMATE_MODEL, _CLIMATE_ENCODERS
 
 
 # =========================================================
@@ -37,6 +39,7 @@ encoders = joblib.load(
 # =========================================================
 
 def predict_climate_risk(data):
+    model, encoders = get_climate_artifacts()
 
     # =====================================================
     # 1. GET LOCATION

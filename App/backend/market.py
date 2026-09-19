@@ -23,37 +23,18 @@ MAPPINGS_PATH = (
 
 
 # =========================================================
-# LOAD MODEL
+# LAZY MODEL LOADING
 # =========================================================
 
-model = joblib.load(
-    MODEL_PATH
-)
+_MARKET_MODEL = None
+_MARKET_MAPPINGS = None
 
-
-# =========================================================
-# LOAD MAPPINGS
-# =========================================================
-
-mappings = joblib.load(
-    MAPPINGS_PATH
-)
-
-
-commodity_mapping = (
-    mappings["commodity_mapping"]
-)
-
-state_mapping = (
-    mappings["state_mapping"]
-)
-
-district_mapping = (
-    mappings["district_mapping"]
-)
-
-
-# Model mappings loaded successfully.
+def get_market_model_and_mappings():
+    global _MARKET_MODEL, _MARKET_MAPPINGS
+    if _MARKET_MODEL is None or _MARKET_MAPPINGS is None:
+        _MARKET_MODEL = joblib.load(MODEL_PATH)
+        _MARKET_MAPPINGS = joblib.load(MAPPINGS_PATH)
+    return _MARKET_MODEL, _MARKET_MAPPINGS
 
 
 
@@ -249,7 +230,10 @@ def predict_market_price(
     quarter = int(
         date.quarter
     )
-
+    model, mappings = get_market_model_and_mappings()
+    commodity_mapping = mappings["commodity_mapping"]
+    state_mapping = mappings["state_mapping"]
+    district_mapping = mappings["district_mapping"]
 
     # Case-insensitive mapping & fallbacks for state
     state_keys = {str(k).lower(): k for k in state_mapping.keys()}

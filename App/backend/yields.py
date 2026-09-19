@@ -46,24 +46,22 @@ for file_path in required_files:
 
 
 # ============================================================
-# LOAD MODEL FILES
+# LAZY MODEL LOADING
 # ============================================================
 
-model = joblib.load(
-    MODEL_PATH
-)
+_YIELD_MODEL = None
+_YIELD_ENCODER = None
+_YIELD_FEATURES = None
+_YIELD_STATE_MAPPING = None
 
-encoder = joblib.load(
-    ENCODER_PATH
-)
-
-model_features = joblib.load(
-    FEATURES_PATH
-)
-
-state_mapping = joblib.load(
-    STATE_MAPPING_PATH
-)
+def get_yield_model_artifacts():
+    global _YIELD_MODEL, _YIELD_ENCODER, _YIELD_FEATURES, _YIELD_STATE_MAPPING
+    if _YIELD_MODEL is None:
+        _YIELD_MODEL = joblib.load(MODEL_PATH)
+        _YIELD_ENCODER = joblib.load(ENCODER_PATH)
+        _YIELD_FEATURES = joblib.load(FEATURES_PATH)
+        _YIELD_STATE_MAPPING = joblib.load(STATE_MAPPING_PATH)
+    return _YIELD_MODEL, _YIELD_ENCODER, _YIELD_FEATURES, _YIELD_STATE_MAPPING
 
 
 # ============================================================
@@ -153,9 +151,8 @@ def predict_yield(input_data):
         "location": ...,
         "weather": ...,
         "soil": ...
-    }
     """
-
+    model, encoder, model_features, state_mapping = get_yield_model_artifacts()
 
     # ========================================================
     # 1. GET FARMER INPUT

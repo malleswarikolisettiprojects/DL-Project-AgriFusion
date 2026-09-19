@@ -46,14 +46,24 @@ for file_path in required_files:
 
 
 # ============================================================
-# LOAD MODEL & PICKLES
+# LAZY MODEL LOADING
 # ============================================================
 
-model = joblib.load(MODEL_PATH)
-scaler = joblib.load(SCALER_PATH)
-season_encoder = joblib.load(SEASON_ENCODER_PATH)
-label_encoder = joblib.load(LABEL_ENCODER_PATH)
-MODEL_FEATURES = joblib.load(FEATURE_COLUMNS_PATH)
+_CROP_MODEL = None
+_CROP_SCALER = None
+_CROP_SEASON_ENCODER = None
+_CROP_LABEL_ENCODER = None
+_CROP_MODEL_FEATURES = None
+
+def get_crop_model_artifacts():
+    global _CROP_MODEL, _CROP_SCALER, _CROP_SEASON_ENCODER, _CROP_LABEL_ENCODER, _CROP_MODEL_FEATURES
+    if _CROP_MODEL is None:
+        _CROP_MODEL = joblib.load(MODEL_PATH)
+        _CROP_SCALER = joblib.load(SCALER_PATH)
+        _CROP_SEASON_ENCODER = joblib.load(SEASON_ENCODER_PATH)
+        _CROP_LABEL_ENCODER = joblib.load(LABEL_ENCODER_PATH)
+        _CROP_MODEL_FEATURES = joblib.load(FEATURE_COLUMNS_PATH)
+    return _CROP_MODEL, _CROP_SCALER, _CROP_SEASON_ENCODER, _CROP_LABEL_ENCODER, _CROP_MODEL_FEATURES
 
 
 # ============================================================
@@ -127,6 +137,7 @@ def get_soil_value(soil, *keys):
 # ============================================================
 
 def predict_crop(input_data):
+    model, scaler, season_encoder, label_encoder, MODEL_FEATURES = get_crop_model_artifacts()
 
     # ========================================================
     # 1. USER INPUT

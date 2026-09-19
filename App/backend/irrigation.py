@@ -49,45 +49,25 @@ for file_path in required_files:
 
 
 # =========================================================
-# LOAD MODEL
+# LAZY MODEL LOADING
 # =========================================================
 
-model = joblib.load(MODEL_PATH)
+_IRRIGATION_MODEL = None
+_IRRIGATION_ENCODER = None
+_IRRIGATION_PREPROCESSING = None
+_IRRIGATION_FEATURES = None
 
-
-# =========================================================
-# LOAD ENCODER
-# =========================================================
-
-encoder = joblib.load(ENCODER_PATH)
-
-
-# =========================================================
-# LOAD PREPROCESSING
-# =========================================================
-
-preprocessing = joblib.load(PREPROCESSING_PATH)
-
-
-# =========================================================
-# GET EXACT MODEL FEATURES
-# =========================================================
-
-if hasattr(model, "feature_names_in_"):
-
-    model_features = list(
-        model.feature_names_in_
-    )
-
-else:
-
-    model_features = list(
-        joblib.load(FEATURES_PATH)
-    )
-
-
-# =========================================================
-# Irrigation model configuration loaded successfully.
+def get_irrigation_artifacts():
+    global _IRRIGATION_MODEL, _IRRIGATION_ENCODER, _IRRIGATION_PREPROCESSING, _IRRIGATION_FEATURES
+    if _IRRIGATION_MODEL is None:
+        _IRRIGATION_MODEL = joblib.load(MODEL_PATH)
+        _IRRIGATION_ENCODER = joblib.load(ENCODER_PATH)
+        _IRRIGATION_PREPROCESSING = joblib.load(PREPROCESSING_PATH)
+        if hasattr(_IRRIGATION_MODEL, "feature_names_in_"):
+            _IRRIGATION_FEATURES = list(_IRRIGATION_MODEL.feature_names_in_)
+        else:
+            _IRRIGATION_FEATURES = list(joblib.load(FEATURES_PATH))
+    return _IRRIGATION_MODEL, _IRRIGATION_ENCODER, _IRRIGATION_PREPROCESSING, _IRRIGATION_FEATURES
 
 
 
@@ -105,6 +85,8 @@ def predict_irrigation(
             climate_result = predict_climate_risk(input_data)
         except Exception:
             climate_result = {"predicted_climate_risk": "low"}
+
+    model, encoder, preprocessing, model_features = get_irrigation_artifacts()
 
     """
     Predict irrigation requirement.
