@@ -41,21 +41,19 @@ _load_dotenv_if_dev()
 # ──────────────────────────────────────────────────────────────────────────────
 def _get_env(key: str) -> Optional[str]:
     """
-    Resolve a configuration value from:
-    1. Streamlit secrets (st.secrets) — available when running via Streamlit
-    2. os.environ — standard environment variables
-
+    Resolve a configuration value from os.environ (or st.secrets if already in Streamlit).
     Returns None (never raises) if not configured.
     Never prints or returns secret values.
     """
-    # Try Streamlit secrets first (when running inside Streamlit)
-    try:
-        import streamlit as st
-        if hasattr(st, "secrets") and key in st.secrets:
-            value = str(st.secrets[key]).strip()
-            return value if value else None
-    except Exception:
-        pass
+    if "streamlit" in sys.modules:
+        try:
+            st = sys.modules["streamlit"]
+            if hasattr(st, "secrets") and key in st.secrets:
+                value = str(st.secrets[key]).strip()
+                if value:
+                    return value
+        except Exception:
+            pass
 
     value = os.environ.get(key, "").strip()
     return value if value else None
