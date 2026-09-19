@@ -1,0 +1,4 @@
+# Render Deployment Ignore List
+# These directories are preserved in GitHub, but Render skips them during deployment to save build time & memory.
+
+Notebooks/
