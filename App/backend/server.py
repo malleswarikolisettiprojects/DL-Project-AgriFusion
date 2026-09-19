@@ -12,6 +12,7 @@ Exposes REST endpoints for all 8 AI models and data services:
 9. Farm Records & History (/api/v1/farm/records, /api/v1/farm/save-record)
 """
 
+import logging
 import os
 import sys
 import uuid
@@ -19,6 +20,9 @@ import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 # Suppress sklearn pickle version warnings for clean console output
 warnings.filterwarnings("ignore")
@@ -195,12 +199,25 @@ def api_predict_crop(req: CropRequest, x_user_email: Optional[str] = Header(None
 # 2. Climate Risk API
 @app.post("/api/v1/predict/climate")
 def api_predict_climate(req: ClimateRiskRequest, x_user_email: Optional[str] = Header(None)):
+    request_id = str(uuid.uuid4())
+    logger.info("[%s] Climate request: state=%s district=%s crop=%s sowing_date=%s",
+                request_id, req.state, req.district, req.crop, req.sowing_date)
     try:
-        payload = {"state": req.state, "district": req.district, "crop": req.crop, "start_date": req.sowing_date}
+        payload = {
+            "state": req.state,
+            "district": req.district,
+            "crop": req.crop,
+            "start_date": req.sowing_date,
+        }
         result = predict_climate_risk(payload)
-        save_climate_prediction({**result, "user_email": x_user_email})
+        # predict_climate_risk() already calls save_climate_prediction internally.
+        # Strip non-JSON-serializable fields (DataFrames) before returning.
+        result.pop("daily_data", None)
+        result.pop("hourly_data", None)
+        logger.info("[%s] Climate prediction success: risk=%s", request_id, result.get("risk_category"))
         return {"status": "success", "result": result}
     except Exception:
+        logger.exception("[%s] Climate prediction failed", request_id)
         raise HTTPException(500, "Climate risk prediction failed. Please try again.")
 
 

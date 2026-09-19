@@ -424,33 +424,35 @@ def predict_climate_risk(data):
     # 12. RETURN PREDICTION
     # =====================================================
 
+    def _safe(v):
+        """Convert numpy scalars to JSON-safe Python primitives."""
+        import numpy as np
+        if isinstance(v, (np.integer,)):
+            return int(v)
+        if isinstance(v, (np.floating,)):
+            return float(v)
+        return v
+
     return {
         "predicted_climate_risk": predicted_climate_risk,
         "climate_risk": predicted_climate_risk,
         "risk_category": str(predicted_climate_risk).title(),
-        "temperature": weather["mean_temperature"],
-        "relative_humidity": weather["relative_humidity"],
-        "precipitation": weather["precipitation"],
-        "wind_speed": weather["wind_speed"],
-        "et0": weather["et0"],
-        "elevation": weather["elevation"],
-        "heat_index": climate_features["Heat_Index"],
-        "growing_degree_days": climate_features["Growing_Degree_Days"],
-        "rainfall_last_7_days": climate_features["Rainfall_Last_7_Days"],
-        "rainfall_last_30_days": climate_features["Rainfall_Last_30_Days"],
-        "consecutive_dry_days": climate_features["Consecutive_Dry_Days"],
-        "soil_ph": soil["Soil_pH"],
-        "organic_carbon": soil["Organic_Carbon"],
+        "temperature": _safe(weather["mean_temperature"]),
+        "relative_humidity": _safe(weather["relative_humidity"]),
+        "precipitation": _safe(weather["precipitation"]),
+        "wind_speed": _safe(weather["wind_speed"]),
+        "et0": _safe(weather["et0"]),
+        "elevation": _safe(weather.get("elevation")),
+        "heat_index": _safe(climate_features["Heat_Index"]),
+        "growing_degree_days": _safe(climate_features["Growing_Degree_Days"]),
+        "rainfall_last_7_days": _safe(climate_features["Rainfall_Last_7_Days"]),
+        "rainfall_last_30_days": _safe(climate_features["Rainfall_Last_30_Days"]),
+        "consecutive_dry_days": _safe(climate_features["Consecutive_Dry_Days"]),
+        "soil_ph": _safe(soil["Soil_pH"]),
+        "organic_carbon": _safe(soil["Organic_Carbon"]),
         "city": location["name"],
         "state": location["state"],
-        "latitude": latitude,
-        "longitude": longitude,
-        "daily_data": (
-            [
-                {k: (str(v) if hasattr(v, "isoformat") or type(v).__name__ == "Timestamp" else v) for k, v in row.items()}
-                for row in weather.get("daily_data").to_dict(orient="records")
-            ]
-            if hasattr(weather.get("daily_data"), "to_dict")
-            else weather.get("daily_data")
-        ),
+        "latitude": _safe(latitude),
+        "longitude": _safe(longitude),
+        # daily_data intentionally omitted — stripped in server.py before JSON response
     }

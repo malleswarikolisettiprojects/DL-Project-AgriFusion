@@ -34,38 +34,36 @@ def calculate_climate_features(weather):
             "Daily weather data is empty."
         )
 
-    if hourly_df.empty:
-        raise ValueError(
-            "Hourly weather data is empty."
-        )
-
-    hourly_df["Date"] = (
-        hourly_df["DateTime"].dt.date
-    )
-
     daily_df["Date"] = (
         daily_df["Date"].dt.date
     )
 
-    humidity_df = (
-        hourly_df
-        .groupby("Date")["relative_humidity"]
-        .mean()
-        .reset_index()
-    )
-
-    daily_df = daily_df.merge(
-        humidity_df,
-        on="Date",
-        how="left"
-    )
-
-    daily_df["relative_humidity"] = (
-        daily_df["relative_humidity"]
-        .fillna(
-            weather["relative_humidity"]
+    # Use hourly data for per-day humidity if available;
+    # fall back to the aggregated humidity value from the weather dict.
+    if not hourly_df.empty and "DateTime" in hourly_df.columns:
+        hourly_df["Date"] = (
+            hourly_df["DateTime"].dt.date
         )
-    )
+        humidity_df = (
+            hourly_df
+            .groupby("Date")["relative_humidity"]
+            .mean()
+            .reset_index()
+        )
+        daily_df = daily_df.merge(
+            humidity_df,
+            on="Date",
+            how="left"
+        )
+        daily_df["relative_humidity"] = (
+            daily_df["relative_humidity"]
+            .fillna(weather.get("relative_humidity") or 70.0)
+        )
+    else:
+        # Fallback: use the aggregated humidity scalar for every day
+        daily_df["relative_humidity"] = (
+            weather.get("relative_humidity") or 70.0
+        )
 
     daily_df["Heat_Index"] = daily_df.apply(
         lambda row: calculate_heat_index(
