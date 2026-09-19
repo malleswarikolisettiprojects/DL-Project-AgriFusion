@@ -219,9 +219,9 @@ def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "ima
         return {"provider": "huggingface", "model": config.get("model_id", ""), "status": "skipped",
                 "error": "HF_TOKEN is not configured.", "detections": [], "top_confidence": 0.0}
     model_id = config["model_id"]
-    url = f"https://router.huggingface.co/hf-inference/models/{model_id}"
+    url = f"https://api-inference.huggingface.co/models/{model_id}"
     headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": content_type}
-    response = httpx.post(url, headers=headers, content=raw, timeout=60)
+    response = httpx.post(url, headers=headers, content=raw, timeout=30)
     response.raise_for_status()
     payload = response.json()
     items = []
@@ -269,30 +269,16 @@ def best_result(runs: list[dict[str, Any]], min_conf: float = 0.0) -> dict[str, 
 def draw_bounding_boxes(pil_image: Image.Image, winner_detections: list[dict[str, Any]]) -> str:
     annotated = pil_image.copy()
     draw = ImageDraw.Draw(annotated)
-    width, height = annotated.size
-
-    colors = ["#EF4444", "#3B82F6", "#10B981", "#F59E0B", "#8B5CF6"]
-
-    for idx, item in enumerate(winner_detections):
-        det = item.get("detection") or {}
-        box = det.get("box_xyxy") or [0, 0, 0, 0]
-        label = det.get("label", "Detection")
-        conf = det.get("confidence", 0.0)
-
-        color = colors[idx % len(colors)]
-        x1, y1, x2, y2 = box
-
-        if x2 <= 1.0 and y2 <= 1.0 and (width > 1 and height > 1):
-            x1, y1, x2, y2 = x1 * width, y1 * height, x2 * width, y2 * height
-
-        draw.rectangle([x1, y1, x2, y2], outline=color, width=4)
-        tag = f"{label} ({conf*100:.1f}%)"
-        draw.rectangle([x1, max(0, y1 - 22), x1 + len(tag) * 9, y1], fill=color)
-        draw.text((x1 + 4, max(0, y1 - 20)), tag, fill="#FFFFFF")
-
+    w, h = pil_image.size
+    for winner in winner_detections:
+        det = winner["detection"]
+        box = det.get("box_xyxy", [])
+        if len(box) == 4:
+            draw.rectangle(box, outline="red", width=3)
+            draw.text((box[0] + 5, box[1] + 5), f"{det['label']} ({det['confidence']:.0%})", fill="red")
     buffer = io.BytesIO()
     annotated.save(buffer, format="JPEG")
-    return base64.b64encode(buffer.getvalue()).decode()
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 def json_safe(value: Any) -> Any:
@@ -343,7 +329,12 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     top_pest = best_result(pest_runs, min_conf=min_conf)
     top_nutrient = best_result(nutrient_runs, min_conf=min_conf)
 
-    all_winners = [item for item in [top_crop, top_pest, top_nutrient] if item]
+    # Sort all winners by confidence descending so highest confidence is selected as primary
+    all_winners = sorted(
+        [item for item in [top_crop, top_pest, top_nutrient] if item],
+        key=lambda x: x["detection"].get("confidence", 0.0),
+        reverse=True
+    )
     annotated_b64 = draw_bounding_boxes(pil_image, all_winners) if all_winners else ""
 
     # Secondary/Alternate Detections list
@@ -364,15 +355,9 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     top_confidence_val = 0.0
     is_low_confidence = False
 
-    if top_crop:
-        primary_label = top_crop["detection"]["label"]
-        top_confidence_val = top_crop["detection"].get("confidence", 0.0)
-    elif top_pest:
-        primary_label = top_pest["detection"]["label"]
-        top_confidence_val = top_pest["detection"].get("confidence", 0.0)
-    elif top_nutrient:
-        primary_label = top_nutrient["detection"]["label"]
-        top_confidence_val = top_nutrient["detection"].get("confidence", 0.0)
+    if all_winners:
+        primary_label = all_winners[0]["detection"]["label"]
+        top_confidence_val = all_winners[0]["detection"].get("confidence", 0.0)
 
     if top_confidence_val < LOW_CONFIDENCE_THRESHOLD and (top_crop or top_pest or top_nutrient):
         is_low_confidence = True
