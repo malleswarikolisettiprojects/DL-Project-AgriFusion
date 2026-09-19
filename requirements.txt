@@ -2,8 +2,7 @@
 # =================================
 # Run: pip install -r requirements.txt
 
-# ── Streamlit & Web Framework ─────────────────────────────────────────────
-streamlit>=1.31.0
+# streamlit>=1.31.0       # Disabled: FastAPI is used as backend
 
 # ── Data Science & ML ─────────────────────────────────────────────────────
 pandas>=2.0.0
