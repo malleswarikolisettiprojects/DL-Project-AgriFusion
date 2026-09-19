@@ -61,22 +61,15 @@ app = FastAPI(
 # ── CORS ──────────────────────────────────────────────────────────────────────
 frontend_url = os.getenv("FRONTEND_URL", "")
 
-allowed_origins = [
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-]
-
-if frontend_url:
-    allowed_origins.append(frontend_url.rstrip("/"))
+# Allow all origins (*) during preview/dev so Google AI Studio & local apps connect before publishing
+allowed_origins = [frontend_url.rstrip("/")] if (frontend_url and frontend_url != "*") else ["*"]
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization", "X-User-Email"],
+    allow_headers=["*"],
 )
 
 
