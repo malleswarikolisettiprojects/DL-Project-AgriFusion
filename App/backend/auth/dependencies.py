@@ -61,6 +61,9 @@ def authentication_error() -> HTTPException:
     )
 
 
+unauthorized = authentication_error
+
+
 def get_role_from_claims(claims: dict[str, Any]) -> str:
     """
     Read roles only from app_metadata or a server-controlled claim.
@@ -149,7 +152,18 @@ async def get_optional_current_user(
 async def require_admin(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
-    if current_user.role not in ("admin", "super_admin", "Super Admin", "Admin"):
+    configured_admin_ids = {
+        item.strip()
+        for item in os.getenv("ADMIN_USER_IDS", "").split(",")
+        if item.strip()
+    }
+
+    is_admin = (
+        current_user.role in ("admin", "super_admin", "Super Admin", "Admin")
+        or current_user.id in configured_admin_ids
+    )
+
+    if not is_admin:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin access required",

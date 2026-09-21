@@ -179,6 +179,19 @@ def test_admin_update_role(mock_verify):
     assert data["role"] == "editor"
 
 
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_user_ids_allowlist(mock_verify):
+    """Verify user in ADMIN_USER_IDS is granted admin access even if role is 'user'."""
+    with patch.dict("os.environ", {"ADMIN_USER_IDS": "allowlisted-admin-999,other-id"}):
+        token = generate_test_jwt(user_id="allowlisted-admin-999", role="user")
+        headers = {"Authorization": f"Bearer {token}"}
+        response = client.get("/api/v1/auth/admin-check", headers=headers)
+        assert response.status_code == 200
+        data = response.json()
+        assert data["authenticated"] is True
+        assert data["admin"] is True
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Running Isolated Admin Auth Verification Suite...")
@@ -205,6 +218,9 @@ if __name__ == "__main__":
     test_admin_route_accepts_admin()
     print(" [PASS] test_admin_route_accepts_admin")
 
+    test_admin_user_ids_allowlist()
+    print(" [PASS] test_admin_user_ids_allowlist")
+
     test_admin_check_endpoint()
     print(" [PASS] test_admin_check_endpoint")
 
@@ -214,3 +230,4 @@ if __name__ == "__main__":
     print("=" * 60)
     print("ALL ISOLATED AUTH TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
+
