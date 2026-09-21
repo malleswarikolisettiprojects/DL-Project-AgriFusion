@@ -24,6 +24,13 @@ from App.backend.database.feedback_db import (
     get_farmer_feedback_detail,
     update_farmer_feedback_record,
 )
+from App.backend.database.sources_db import (
+    fetch_knowledge_sources_list,
+    get_knowledge_source_detail,
+    reindex_knowledge_source,
+    register_knowledge_source,
+    update_knowledge_source_metadata,
+)
 from App.backend.database.auth_db import (
     count_active_admins_in_db,
     fetch_all_supabase_predictions,
@@ -41,6 +48,119 @@ admin_router = APIRouter(
 
 UserRole = Literal["user", "admin", "super_admin", "auditor", "agronomist", "editor"]
 UserStatus = Literal["active", "suspended", "archived"]
+
+SourceType = Literal[
+    "government_department",
+    "state_agriculture_department",
+    "state_horticulture_department",
+    "icar",
+    "icar_institute",
+    "kvk",
+    "agricultural_university",
+    "ppqs",
+    "cibrc",
+    "official_scheme_portal",
+    "other_authoritative",
+]
+
+ALLOWED_SOURCE_TYPES = {
+    "government_department",
+    "state_agriculture_department",
+    "state_horticulture_department",
+    "icar",
+    "icar_institute",
+    "kvk",
+    "agricultural_university",
+    "ppqs",
+    "cibrc",
+    "official_scheme_portal",
+    "other_authoritative",
+}
+
+VerificationStatus = Literal[
+    "pending_review",
+    "verified",
+    "verified_with_caveats",
+    "needs_review",
+    "stale",
+    "unavailable",
+    "rejected",
+]
+
+ALLOWED_VERIFICATION_STATUSES = {
+    "pending_review",
+    "verified",
+    "verified_with_caveats",
+    "needs_review",
+    "stale",
+    "unavailable",
+    "rejected",
+}
+
+IndexStatus = Literal[
+    "not_indexed",
+    "queued",
+    "indexing",
+    "indexed",
+    "index_failed",
+    "outdated",
+]
+
+ALLOWED_INDEX_STATUSES = {
+    "not_indexed",
+    "queued",
+    "indexing",
+    "indexed",
+    "index_failed",
+    "outdated",
+}
+
+class AdminSourceItem(BaseModel):
+    id: str
+    title: str
+    organization: str
+    source_type: SourceType
+    subject: Optional[str] = None
+    crop: Optional[str] = None
+    state_relevance: List[str] = []
+    official_url: str
+    document_format: str = "PDF"
+    language: str = "English"
+    verification_status: VerificationStatus
+    verified_date: Optional[str] = None
+    verified_by: Optional[str] = None
+    verification_notes: Optional[str] = None
+    last_indexed_at: Optional[str] = None
+    index_status: IndexStatus
+    is_active: bool = True
+    needs_review: bool = False
+    caveats: List[str] = []
+
+class AdminSourceListResponse(BaseModel):
+    items: List[AdminSourceItem]
+    page: int
+    page_size: int
+    total: int
+    privacy_note: str
+
+class RegisterSourceRequest(BaseModel):
+    title: str = Field(..., min_length=2)
+    organization: str = Field(..., min_length=2)
+    source_type: SourceType
+    official_url: str = Field(..., min_length=8)
+    subject: Optional[str] = None
+    crop: Optional[str] = None
+    state_relevance: Optional[List[str]] = None
+    language: Optional[str] = "English"
+    verification_notes: Optional[str] = None
+
+class UpdateSourceMetadataRequest(BaseModel):
+    verification_status: Optional[VerificationStatus] = None
+    verification_notes: Optional[str] = None
+    is_active: Optional[bool] = None
+    needs_review: Optional[bool] = None
+    caveats: Optional[List[str]] = None
+
 
 
 class AdminUserResponse(BaseModel):
@@ -677,6 +797,218 @@ async def export_audit_logs_csv(
         media_type="text/csv",
         headers={"Content-Disposition": "attachment; filename=admin_audit_logs.csv"},
     )
+
+
+@admin_router.get(
+    "/sources",
+    response_model=AdminSourceListResponse,
+)
+async def get_admin_knowledge_sources(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    organization: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
+    crop: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    verification_status: Optional[str] = Query(None),
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    List canonical agricultural RAG knowledge sources with filtering and pagination.
+    Validates all requested filter types and returns explicit source verification states.
+    """
+    if source_type and source_type not in ALLOWED_SOURCE_TYPES:
+        raise HTTPException(status_code=422, detail=f"Unsupported source_type filter '{source_type}'. Allowed values: {sorted(list(ALLOWED_SOURCE_TYPES))}")
+
+    if verification_status and verification_status not in ALLOWED_VERIFICATION_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Unsupported verification_status filter '{verification_status}'. Allowed values: {sorted(list(ALLOWED_VERIFICATION_STATUSES))}")
+
+    if status and status not in ALLOWED_INDEX_STATUSES:
+        raise HTTPException(status_code=422, detail=f"Unsupported index status filter '{status}'. Allowed values: {sorted(list(ALLOWED_INDEX_STATUSES))}")
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="source_viewed",
+        target_type="knowledge_source",
+        safe_metadata={
+            "page": page,
+            "page_size": page_size,
+            "organization": organization,
+            "source_type": source_type,
+            "verification_status": verification_status,
+        },
+    )
+
+    data = fetch_knowledge_sources_list(
+        page=page,
+        page_size=page_size,
+        search=search,
+        organization=organization,
+        source_type=source_type,
+        crop=crop,
+        state=state,
+        status=status,
+        verification_status=verification_status,
+    )
+    return data
+
+
+@admin_router.get("/sources/{source_id}", response_model=AdminSourceItem)
+async def get_admin_knowledge_source_detail(
+    source_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Retrieve metadata for a single canonical knowledge source by ID."""
+    item = get_knowledge_source_detail(source_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Knowledge source '{source_id}' not found.")
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="source_viewed",
+        target_type="knowledge_source",
+        target_id=source_id,
+        safe_metadata={"title": item.get("title"), "organization": item.get("organization")},
+    )
+
+    return item
+
+
+@admin_router.post("/sources/register", status_code=201)
+async def register_admin_knowledge_source(
+    payload: RegisterSourceRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Register a new official knowledge source URL or publication.
+    Initial verification status is set to 'pending_review' and index_status to 'not_indexed'.
+    """
+    url = payload.official_url.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(status_code=422, detail="Official source URL must begin with http:// or https://")
+
+    success, result = register_knowledge_source(
+        title=payload.title,
+        organization=payload.organization,
+        source_type=payload.source_type,
+        official_url=url,
+        subject=payload.subject,
+        crop=payload.crop,
+        state_relevance=payload.state_relevance,
+        language=payload.language or "English",
+        verification_notes=payload.verification_notes,
+    )
+
+    if not success:
+        if "Duplicate" in str(result):
+            raise HTTPException(status_code=409, detail=str(result))
+        raise HTTPException(status_code=422, detail=str(result))
+
+    new_id = result.get("id") if isinstance(result, dict) else None
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="source_registered",
+        target_type="knowledge_source",
+        target_id=new_id,
+        safe_metadata={
+            "title": payload.title,
+            "organization": payload.organization,
+            "source_type": payload.source_type,
+            "official_url": url,
+        },
+    )
+
+    return result
+
+
+@admin_router.patch("/sources/{source_id}", response_model=AdminSourceItem)
+async def update_admin_knowledge_source(
+    source_id: str,
+    payload: UpdateSourceMetadataRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Update verification status, caveats, or active flag for a knowledge source."""
+    existing = get_knowledge_source_detail(source_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Knowledge source '{source_id}' not found.")
+
+    if payload.verification_status == "verified":
+        if not existing.get("official_url") or not existing.get("organization"):
+            raise HTTPException(status_code=422, detail="Verified status requires valid official URL and organization.")
+    elif payload.verification_status == "verified_with_caveats":
+        merged_caveats = payload.caveats if payload.caveats is not None else existing.get("caveats", [])
+        if not merged_caveats:
+            raise HTTPException(status_code=422, detail="verified_with_caveats status requires at least one written caveat.")
+    elif payload.verification_status in ("stale", "unavailable"):
+        notes = payload.verification_notes or existing.get("verification_notes")
+        if not notes or not notes.strip():
+            raise HTTPException(status_code=422, detail=f"Status '{payload.verification_status}' requires a reason or verification notes.")
+
+    success, result = update_knowledge_source_metadata(
+        source_id=source_id,
+        admin_user_id=admin_user.id,
+        verification_status=payload.verification_status,
+        verification_notes=payload.verification_notes,
+        is_active=payload.is_active,
+        needs_review=payload.needs_review,
+        caveats=payload.caveats,
+    )
+
+    if not success:
+        raise HTTPException(status_code=422, detail=str(result))
+
+    # Audit events
+    if payload.verification_status == "stale":
+        action_name = "source_marked_stale"
+    elif payload.verification_status == "unavailable":
+        action_name = "source_marked_unavailable"
+    elif payload.verification_status is not None:
+        action_name = "source_status_changed"
+    else:
+        action_name = "source_metadata_updated"
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action=action_name,
+        target_type="knowledge_source",
+        target_id=source_id,
+        safe_metadata={
+            "new_verification_status": payload.verification_status,
+            "is_active": payload.is_active,
+        },
+    )
+
+    return result
+
+
+@admin_router.post("/sources/{source_id}/reindex")
+async def trigger_reindex_source(
+    source_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Queue a single knowledge source for background reindexing."""
+    existing = get_knowledge_source_detail(source_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Knowledge source '{source_id}' not found.")
+
+    if existing.get("verification_status") == "rejected":
+        raise HTTPException(status_code=422, detail="Rejected sources cannot be queued for reindexing.")
+
+    success, result = reindex_knowledge_source(source_id, admin_user.id)
+    if not success:
+        raise HTTPException(status_code=422, detail=str(result))
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="source_reindex_requested",
+        target_type="knowledge_source",
+        target_id=source_id,
+        safe_metadata={"index_status": "queued"},
+    )
+
+    return result
 
 
 @admin_router.get("/knowledge-sources")

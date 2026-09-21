@@ -509,6 +509,160 @@ if __name__ == "__main__":
     test_submit_farmer_feedback()
     print(" [PASS] test_submit_farmer_feedback")
 
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_sources_unauthenticated(mock_verify):
+    res = client.get("/api/v1/admin/sources")
+    assert res.status_code == 401
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_sources_normal_user(mock_verify):
+    token = generate_test_jwt(user_id="usr-src-1", role="user")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/sources", headers=headers)
+    assert res.status_code == 403
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_sources_workflow(mock_verify):
+    token = generate_test_jwt(user_id="adm-src-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. List initial sources
+    res = client.get("/api/v1/admin/sources", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "items" in data
+    assert "total" in data
+    assert data["page"] == 1
+
+    # 2. Test invalid filter values return 422
+    res_inv = client.get("/api/v1/admin/sources?source_type=invalid_type_xyz", headers=headers)
+    assert res_inv.status_code == 422
+
+    # 3. Register a new canonical knowledge source
+    reg_payload = {
+        "title": "State Department Mango Pest Management Guidelines",
+        "organization": "State Agriculture Department",
+        "source_type": "state_agriculture_department",
+        "official_url": "https://agri.ap.gov.in/guidance/mango-ipm-2026",
+        "subject": "Plant Protection",
+        "crop": "Mango",
+        "state_relevance": ["Andhra Pradesh"],
+        "language": "Telugu",
+        "verification_notes": "Official state portal publication.",
+    }
+    reg_res = client.post("/api/v1/admin/sources/register", json=reg_payload, headers=headers)
+    assert reg_res.status_code == 201, f"Expected 201, got {reg_res.status_code}: {reg_res.text}"
+    created = reg_res.json()
+    assert created["title"] == reg_payload["title"]
+    assert created["verification_status"] == "pending_review"
+    assert created["index_status"] == "not_indexed"
+    src_id = created["id"]
+
+    # 4. Duplicate URL attempt returns 409 Conflict
+    dup_res = client.post("/api/v1/admin/sources/register", json=reg_payload, headers=headers)
+    assert dup_res.status_code == 409
+
+    # 5. Retrieve source detail
+    detail_res = client.get(f"/api/v1/admin/sources/{src_id}", headers=headers)
+    assert detail_res.status_code == 200
+    assert detail_res.json()["id"] == src_id
+
+    # 6. Update metadata to verified_with_caveats
+    update_payload = {
+        "verification_status": "verified_with_caveats",
+        "caveats": ["Pre-harvest interval specific to carbendazim missing in source."],
+        "verification_notes": "Verified by state agronomist on official site.",
+    }
+    patch_res = client.patch(f"/api/v1/admin/sources/{src_id}", json=update_payload, headers=headers)
+    assert patch_res.status_code == 200, f"Expected 200, got {patch_res.status_code}: {patch_res.text}"
+    updated = patch_res.json()
+    assert updated["verification_status"] == "verified_with_caveats"
+    assert len(updated["caveats"]) == 1
+
+    # 7. Request background reindexing
+    reindex_res = client.post(f"/api/v1/admin/sources/{src_id}/reindex", headers=headers)
+    assert reindex_res.status_code == 200
+    assert reindex_res.json()["index_status"] == "queued"
+
+    # 8. Verify non-existent source detail returns 404
+    nf_res = client.get("/api/v1/admin/sources/src-nonexistent-999", headers=headers)
+    assert nf_res.status_code == 404
+
+
+if __name__ == "__main__":
+    print("Running isolated authentication, farm, advisory, feedback & sources tests...")
+
+    test_auth_me_authenticated_user()
+    print(" [PASS] test_auth_me_authenticated_user")
+
+    test_admin_route_rejects_missing_token()
+    print(" [PASS] test_admin_route_rejects_missing_token")
+
+    test_admin_route_rejects_invalid_token()
+    print(" [PASS] test_admin_route_rejects_invalid_token")
+
+    test_admin_route_rejects_expired_token()
+    print(" [PASS] test_admin_route_rejects_expired_token")
+
+    test_admin_route_rejects_normal_user()
+    print(" [PASS] test_admin_route_rejects_normal_user")
+
+    test_admin_route_accepts_admin()
+    print(" [PASS] test_admin_route_accepts_admin")
+
+    test_admin_user_ids_allowlist()
+    print(" [PASS] test_admin_user_ids_allowlist")
+
+    test_admin_check_endpoint()
+    print(" [PASS] test_admin_check_endpoint")
+
+    test_admin_get_users()
+    print(" [PASS] test_admin_get_users")
+
+    test_admin_update_status()
+    print(" [PASS] test_admin_update_status")
+
+    test_admin_update_status_invalid_value()
+    print(" [PASS] test_admin_update_status_invalid_value")
+
+    test_admin_update_role()
+    print(" [PASS] test_admin_update_role")
+
+    test_admin_update_role_invalid_value()
+    print(" [PASS] test_admin_update_role_invalid_value")
+
+    test_admin_get_farms()
+    print(" [PASS] test_admin_get_farms")
+
+    test_admin_get_farms_unauthenticated()
+    print(" [PASS] test_admin_get_farms_unauthenticated")
+
+    test_admin_get_farms_normal_user()
+    print(" [PASS] test_admin_get_farms_normal_user")
+
+    test_admin_get_farms_invalid_page_size()
+    print(" [PASS] test_admin_get_farms_invalid_page_size")
+
+    test_admin_get_advisories()
+    print(" [PASS] test_admin_get_advisories")
+
+    test_admin_get_advisories_unauthenticated()
+    print(" [PASS] test_admin_get_advisories_unauthenticated")
+
+    test_admin_get_advisories_normal_user()
+    print(" [PASS] test_admin_get_advisories_normal_user")
+
+    test_admin_review_advisory()
+    print(" [PASS] test_admin_review_advisory")
+
+    test_admin_add_advisory_note()
+    print(" [PASS] test_admin_add_advisory_note")
+
+    test_submit_farmer_feedback()
+    print(" [PASS] test_submit_farmer_feedback")
+
     test_admin_get_feedback_unauthenticated()
     print(" [PASS] test_admin_get_feedback_unauthenticated")
 
@@ -518,9 +672,19 @@ if __name__ == "__main__":
     test_admin_feedback_workflow()
     print(" [PASS] test_admin_feedback_workflow")
 
+    test_admin_get_sources_unauthenticated()
+    print(" [PASS] test_admin_get_sources_unauthenticated")
+
+    test_admin_get_sources_normal_user()
+    print(" [PASS] test_admin_get_sources_normal_user")
+
+    test_admin_sources_workflow()
+    print(" [PASS] test_admin_sources_workflow")
+
     print("=" * 60)
-    print("ALL ISOLATED AUTH, FARM, ADVISORY & FEEDBACK AUDIT TESTS PASSED!")
+    print("ALL ISOLATED AUTH, FARM, ADVISORY, FEEDBACK & KNOWLEDGE SOURCES TESTS PASSED!")
     print("=" * 60)
+
 
 
 
