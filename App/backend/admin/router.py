@@ -31,6 +31,14 @@ from App.backend.database.sources_db import (
     register_knowledge_source,
     update_knowledge_source_metadata,
 )
+from App.backend.database.schemes_db import (
+    fetch_government_schemes_list,
+    get_government_scheme_detail,
+    recheck_government_scheme,
+    register_government_scheme,
+    update_government_scheme_record,
+    verify_government_scheme,
+)
 from App.backend.database.auth_db import (
     count_active_admins_in_db,
     fetch_all_supabase_predictions,
@@ -48,6 +56,104 @@ admin_router = APIRouter(
 
 UserRole = Literal["user", "admin", "super_admin", "auditor", "agronomist", "editor"]
 UserStatus = Literal["active", "suspended", "archived"]
+
+SchemeVerificationStatus = Literal[
+    "pending_review",
+    "verified",
+    "verified_with_caveats",
+    "needs_review",
+    "stale",
+    "unavailable",
+    "rejected",
+]
+
+ALLOWED_SCHEME_VERIFICATION_STATUSES = {
+    "pending_review",
+    "verified",
+    "verified_with_caveats",
+    "needs_review",
+    "stale",
+    "unavailable",
+    "rejected",
+}
+
+SchemeCurrentStatus = Literal[
+    "active",
+    "requires_current_verification",
+    "temporarily_unavailable",
+    "expired_or_closed",
+    "not_available",
+]
+
+ALLOWED_SCHEME_CURRENT_STATUSES = {
+    "active",
+    "requires_current_verification",
+    "temporarily_unavailable",
+    "expired_or_closed",
+    "not_available",
+}
+
+class AdminSchemeItem(BaseModel):
+    id: str
+    scheme_name: str
+    scheme_type: str
+    state_relevance: List[str] = []
+    district_relevance: List[str] = []
+    department: str
+    official_portal: str
+    source_title: Optional[str] = "Official scheme notification"
+    source_organization: Optional[str] = "Government organization"
+    verification_status: SchemeVerificationStatus
+    current_status: SchemeCurrentStatus
+    verified_date: Optional[str] = None
+    verified_by: Optional[str] = None
+    last_checked_at: Optional[str] = None
+    benefit_summary: str = "Benefit stated in the verified official source."
+    eligibility_summary: str = "Possible match; official verification required."
+    required_documents: List[str] = []
+    application_route: Optional[str] = ""
+    deadline: Optional[str] = None
+    caveats: List[str] = []
+    is_active: bool = True
+    needs_review: bool = False
+
+class AdminSchemeListResponse(BaseModel):
+    items: List[AdminSchemeItem]
+    page: int
+    page_size: int
+    total: int
+    privacy_note: str
+
+class RegisterSchemeRequest(BaseModel):
+    scheme_name: str = Field(..., min_length=2)
+    scheme_type: str = Field(..., min_length=2)
+    department: str = Field(..., min_length=2)
+    official_portal: str = Field(..., min_length=8)
+    state_relevance: Optional[List[str]] = None
+    district_relevance: Optional[List[str]] = None
+    source_title: Optional[str] = None
+    source_organization: Optional[str] = None
+    benefit_summary: Optional[str] = None
+    eligibility_summary: Optional[str] = None
+    required_documents: Optional[List[str]] = None
+    application_route: Optional[str] = None
+    deadline: Optional[str] = None
+    caveats: Optional[List[str]] = None
+
+class UpdateSchemeRequest(BaseModel):
+    verification_status: Optional[SchemeVerificationStatus] = None
+    current_status: Optional[SchemeCurrentStatus] = None
+    verification_notes: Optional[str] = None
+    is_active: Optional[bool] = None
+    needs_review: Optional[bool] = None
+    caveats: Optional[List[str]] = None
+
+class VerifySchemeRequest(BaseModel):
+    official_source_url: str = Field(..., min_length=8)
+    verification_notes: str = Field(..., min_length=2)
+    current_status: Optional[SchemeCurrentStatus] = "requires_current_verification"
+    caveats: Optional[List[str]] = None
+
 
 SourceType = Literal[
     "government_department",
@@ -1009,6 +1115,261 @@ async def trigger_reindex_source(
     )
 
     return result
+
+
+@admin_router.get(
+    "/schemes",
+    response_model=AdminSchemeListResponse,
+)
+async def get_admin_government_schemes(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    state: Optional[str] = Query(None),
+    district: Optional[str] = Query(None),
+    department: Optional[str] = Query(None),
+    scheme_type: Optional[str] = Query(None),
+    verification_status: Optional[str] = Query(None),
+    current_status: Optional[str] = Query(None),
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    List verified government agricultural schemes with filtering and pagination.
+    Validates requested filter types and returns explicit verification and status fields.
+    """
+    if verification_status and verification_status not in ALLOWED_SCHEME_VERIFICATION_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported verification_status filter '{verification_status}'. Allowed values: {sorted(list(ALLOWED_SCHEME_VERIFICATION_STATUSES))}"
+        )
+
+    if current_status and current_status not in ALLOWED_SCHEME_CURRENT_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported current_status filter '{current_status}'. Allowed values: {sorted(list(ALLOWED_SCHEME_CURRENT_STATUSES))}"
+        )
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="scheme_viewed",
+        target_type="government_scheme",
+        safe_metadata={
+            "page": page,
+            "page_size": page_size,
+            "state": state,
+            "department": department,
+            "verification_status": verification_status,
+            "current_status": current_status,
+        },
+    )
+
+    data = fetch_government_schemes_list(
+        page=page,
+        page_size=page_size,
+        search=search,
+        state=state,
+        district=district,
+        department=department,
+        scheme_type=scheme_type,
+        verification_status=verification_status,
+        current_status=current_status,
+    )
+    return data
+
+
+@admin_router.get("/schemes/{scheme_id}", response_model=AdminSchemeItem)
+async def get_admin_government_scheme_detail(
+    scheme_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Retrieve metadata for a single government scheme by ID."""
+    item = get_government_scheme_detail(scheme_id)
+    if not item:
+        raise HTTPException(status_code=404, detail=f"Government scheme '{scheme_id}' not found.")
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="scheme_viewed",
+        target_type="government_scheme",
+        target_id=scheme_id,
+        safe_metadata={"scheme_name": item.get("scheme_name"), "department": item.get("department")},
+    )
+
+    return item
+
+
+@admin_router.post("/schemes/register", status_code=201)
+async def register_admin_government_scheme(
+    payload: RegisterSchemeRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Register a new central or state government scheme.
+    Initial status: verification_status='pending_review', current_status='requires_current_verification'.
+    """
+    portal = payload.official_portal.strip()
+    if not (portal.startswith("http://") or portal.startswith("https://")):
+        raise HTTPException(status_code=422, detail="Official portal URL must begin with http:// or https://")
+
+    success, result = register_government_scheme(
+        scheme_name=payload.scheme_name,
+        scheme_type=payload.scheme_type,
+        department=payload.department,
+        official_portal=portal,
+        state_relevance=payload.state_relevance,
+        district_relevance=payload.district_relevance,
+        source_title=payload.source_title,
+        source_organization=payload.source_organization,
+        benefit_summary=payload.benefit_summary,
+        eligibility_summary=payload.eligibility_summary,
+        required_documents=payload.required_documents,
+        application_route=payload.application_route,
+        deadline=payload.deadline,
+        caveats=payload.caveats,
+    )
+
+    if not success:
+        if "Duplicate" in str(result):
+            raise HTTPException(status_code=409, detail=str(result))
+        raise HTTPException(status_code=422, detail=str(result))
+
+    new_id = result.get("id") if isinstance(result, dict) else None
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="scheme_registered",
+        target_type="government_scheme",
+        target_id=new_id,
+        safe_metadata={
+            "scheme_name": payload.scheme_name,
+            "department": payload.department,
+            "official_portal": portal,
+        },
+    )
+
+    return result
+
+
+@admin_router.patch("/schemes/{scheme_id}", response_model=AdminSchemeItem)
+async def update_admin_government_scheme(
+    scheme_id: str,
+    payload: UpdateSchemeRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Update verification status, notes, active state, or caveats for a scheme."""
+    existing = get_government_scheme_detail(scheme_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Government scheme '{scheme_id}' not found.")
+
+    if payload.verification_status == "verified":
+        if not existing.get("official_portal"):
+            raise HTTPException(status_code=422, detail="Verified status requires valid official portal URL.")
+    elif payload.verification_status == "verified_with_caveats":
+        merged_caveats = payload.caveats if payload.caveats is not None else existing.get("caveats", [])
+        if not merged_caveats:
+            raise HTTPException(status_code=422, detail="verified_with_caveats status requires at least one written caveat.")
+    elif payload.verification_status in ("stale", "unavailable", "rejected"):
+        notes = payload.verification_notes or existing.get("verification_notes")
+        if not notes or not notes.strip():
+            raise HTTPException(status_code=422, detail=f"Status '{payload.verification_status}' requires verification notes/reason.")
+
+    success, result = update_government_scheme_record(
+        scheme_id=scheme_id,
+        admin_user_id=admin_user.id,
+        verification_status=payload.verification_status,
+        current_status=payload.current_status,
+        verification_notes=payload.verification_notes,
+        is_active=payload.is_active,
+        needs_review=payload.needs_review,
+        caveats=payload.caveats,
+    )
+
+    if not success:
+        raise HTTPException(status_code=422, detail=str(result))
+
+    if payload.verification_status == "stale":
+        action_name = "scheme_marked_stale"
+    elif payload.verification_status == "unavailable":
+        action_name = "scheme_marked_unavailable"
+    elif payload.verification_status is not None:
+        action_name = "scheme_status_changed"
+    else:
+        action_name = "scheme_metadata_updated"
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action=action_name,
+        target_type="government_scheme",
+        target_id=scheme_id,
+        safe_metadata={
+            "new_verification_status": payload.verification_status,
+            "new_current_status": payload.current_status,
+        },
+    )
+
+    return result
+
+
+@admin_router.post("/schemes/{scheme_id}/verify", response_model=AdminSchemeItem)
+async def verify_admin_government_scheme(
+    scheme_id: str,
+    payload: VerifySchemeRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Officially verify a scheme using official portal source URL, verification notes, and admin ID."""
+    existing = get_government_scheme_detail(scheme_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Government scheme '{scheme_id}' not found.")
+
+    success, result = verify_government_scheme(
+        scheme_id=scheme_id,
+        admin_user_id=admin_user.id,
+        official_source_url=payload.official_source_url,
+        verification_notes=payload.verification_notes,
+        current_status=payload.current_status,
+        caveats=payload.caveats,
+    )
+
+    if not success:
+        raise HTTPException(status_code=422, detail=str(result))
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="scheme_verified",
+        target_type="government_scheme",
+        target_id=scheme_id,
+        safe_metadata={
+            "official_source_url": payload.official_source_url,
+            "current_status": payload.current_status,
+        },
+    )
+
+    return result
+
+
+@admin_router.post("/schemes/{scheme_id}/recheck")
+async def trigger_recheck_scheme(
+    scheme_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Queue a scheme for official re-verification review."""
+    existing = get_government_scheme_detail(scheme_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Government scheme '{scheme_id}' not found.")
+
+    success, result = recheck_government_scheme(scheme_id, admin_user.id)
+    if not success:
+        raise HTTPException(status_code=422, detail=str(result))
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="scheme_recheck_requested",
+        target_type="government_scheme",
+        target_id=scheme_id,
+        safe_metadata={"verification_status": "needs_review"},
+    )
+
+    return result
+
 
 
 @admin_router.get("/knowledge-sources")

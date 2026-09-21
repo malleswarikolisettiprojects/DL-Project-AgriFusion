@@ -560,6 +560,91 @@ def test_admin_sources_workflow(mock_verify):
     assert nf_res.status_code == 404
 
 
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_schemes_unauthenticated(mock_verify):
+    res = client.get("/api/v1/admin/schemes")
+    assert res.status_code == 401
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_schemes_normal_user(mock_verify):
+    token = generate_test_jwt(user_id="usr-sch-1", role="user")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/schemes", headers=headers)
+    assert res.status_code == 403
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_schemes_workflow(mock_verify):
+    import uuid
+    token = generate_test_jwt(user_id="adm-sch-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 1. List initial government schemes
+    res = client.get("/api/v1/admin/schemes", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "items" in data
+    assert "total" in data
+    assert data["page"] == 1
+    assert "privacy_note" in data
+
+    # 2. Test invalid filter values return 422
+    res_inv = client.get("/api/v1/admin/schemes?verification_status=invalid_ver_status", headers=headers)
+    assert res_inv.status_code == 422
+
+    # 3. Register a new government scheme
+    test_portal = f"https://rythubharosa.ap.gov.in/portal-{uuid.uuid4().hex[:6]}"
+    reg_payload = {
+        "scheme_name": "YSR Rythu Bharosa",
+        "scheme_type": "state_welfare_scheme",
+        "department": "Department of Agriculture, Govt of Andhra Pradesh",
+        "official_portal": test_portal,
+        "state_relevance": ["Andhra Pradesh"],
+        "benefit_summary": "₹13,500 per year financial assistance to farmer families including tenant farmers.",
+        "eligibility_summary": "Possible match; official verification required. Land-owning farmer families and eligible tenant farmers.",
+        "caveats": ["Current application window and tenant farmer eligibility must be verified on official portal."],
+    }
+    reg_res = client.post("/api/v1/admin/schemes/register", json=reg_payload, headers=headers)
+    assert reg_res.status_code == 201, f"Expected 201, got {reg_res.status_code}: {reg_res.text}"
+    created = reg_res.json()
+    assert created["scheme_name"] == reg_payload["scheme_name"]
+    assert created["verification_status"] == "pending_review"
+    assert created["current_status"] == "requires_current_verification"
+    sch_id = created["id"]
+
+    # 4. Duplicate official portal registration returns 409
+    dup_res = client.post("/api/v1/admin/schemes/register", json=reg_payload, headers=headers)
+    assert dup_res.status_code == 409
+
+    # 5. Retrieve scheme detail
+    detail_res = client.get(f"/api/v1/admin/schemes/{sch_id}", headers=headers)
+    assert detail_res.status_code == 200
+    assert detail_res.json()["id"] == sch_id
+
+    # 6. Officially verify scheme
+    verify_payload = {
+        "official_source_url": test_portal,
+        "verification_notes": "Verified current state portal guidelines on test date.",
+        "current_status": "requires_current_verification",
+        "caveats": ["Annual eligibility listing updated per season."],
+    }
+    ver_res = client.post(f"/api/v1/admin/schemes/{sch_id}/verify", json=verify_payload, headers=headers)
+    assert ver_res.status_code == 200, f"Expected 200, got {ver_res.status_code}: {ver_res.text}"
+    verified_obj = ver_res.json()
+    assert verified_obj["verification_status"] in ("verified", "verified_with_caveats")
+    assert verified_obj["verified_by"] == "adm-sch-1"
+
+    # 7. Recheck request
+    recheck_res = client.post(f"/api/v1/admin/schemes/{sch_id}/recheck", headers=headers)
+    assert recheck_res.status_code == 200
+    assert recheck_res.json()["needs_review"] is True
+
+    # 8. Retrieve non-existent scheme detail returns 404
+    nf_res = client.get("/api/v1/admin/schemes/sch-nonexistent-999", headers=headers)
+    assert nf_res.status_code == 404
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Running Isolated Admin Auth & User Management Suite...")
@@ -655,9 +740,19 @@ if __name__ == "__main__":
     test_admin_sources_workflow()
     print(" [PASS] test_admin_sources_workflow")
 
+    test_admin_get_schemes_unauthenticated()
+    print(" [PASS] test_admin_get_schemes_unauthenticated")
+
+    test_admin_get_schemes_normal_user()
+    print(" [PASS] test_admin_get_schemes_normal_user")
+
+    test_admin_schemes_workflow()
+    print(" [PASS] test_admin_schemes_workflow")
+
     print("=" * 60)
-    print("ALL ISOLATED AUTH, FARM, ADVISORY, FEEDBACK & KNOWLEDGE SOURCES TESTS PASSED!")
+    print("ALL ISOLATED AUTH, FARM, ADVISORY, FEEDBACK, SOURCES & SCHEMES TESTS PASSED!")
     print("=" * 60)
+
 
 
 
