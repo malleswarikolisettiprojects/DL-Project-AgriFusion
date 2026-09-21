@@ -476,39 +476,6 @@ if __name__ == "__main__":
     test_admin_update_role()
     print(" [PASS] test_admin_update_role")
 
-    test_admin_update_role_invalid_value()
-    print(" [PASS] test_admin_update_role_invalid_value")
-
-    test_admin_get_farms()
-    print(" [PASS] test_admin_get_farms")
-
-    test_admin_get_farms_unauthenticated()
-    print(" [PASS] test_admin_get_farms_unauthenticated")
-
-    test_admin_get_farms_normal_user()
-    print(" [PASS] test_admin_get_farms_normal_user")
-
-    test_admin_get_farms_invalid_page_size()
-    print(" [PASS] test_admin_get_farms_invalid_page_size")
-
-    test_admin_get_advisories()
-    print(" [PASS] test_admin_get_advisories")
-
-    test_admin_get_advisories_unauthenticated()
-    print(" [PASS] test_admin_get_advisories_unauthenticated")
-
-    test_admin_get_advisories_normal_user()
-    print(" [PASS] test_admin_get_advisories_normal_user")
-
-    test_admin_review_advisory()
-    print(" [PASS] test_admin_review_advisory")
-
-    test_admin_add_advisory_note()
-    print(" [PASS] test_admin_add_advisory_note")
-
-    test_submit_farmer_feedback()
-    print(" [PASS] test_submit_farmer_feedback")
-
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
 def test_admin_get_sources_unauthenticated(mock_verify):
     res = client.get("/api/v1/admin/sources")
@@ -525,6 +492,7 @@ def test_admin_get_sources_normal_user(mock_verify):
 
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
 def test_admin_sources_workflow(mock_verify):
+    import uuid
     token = generate_test_jwt(user_id="adm-src-1", role="admin")
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -540,12 +508,13 @@ def test_admin_sources_workflow(mock_verify):
     res_inv = client.get("/api/v1/admin/sources?source_type=invalid_type_xyz", headers=headers)
     assert res_inv.status_code == 422
 
-    # 3. Register a new canonical knowledge source
+    # 3. Register a new canonical knowledge source with a unique URL
+    test_url = f"https://agri.ap.gov.in/guidance/mango-ipm-{uuid.uuid4().hex[:6]}"
     reg_payload = {
         "title": "State Department Mango Pest Management Guidelines",
         "organization": "State Agriculture Department",
         "source_type": "state_agriculture_department",
-        "official_url": "https://agri.ap.gov.in/guidance/mango-ipm-2026",
+        "official_url": test_url,
         "subject": "Plant Protection",
         "crop": "Mango",
         "state_relevance": ["Andhra Pradesh"],
@@ -592,7 +561,12 @@ def test_admin_sources_workflow(mock_verify):
 
 
 if __name__ == "__main__":
-    print("Running isolated authentication, farm, advisory, feedback & sources tests...")
+    print("=" * 60)
+    print("Running Isolated Admin Auth & User Management Suite...")
+    print("=" * 60)
+
+    test_user_metadata_role_ignored()
+    print(" [PASS] test_user_metadata_role_ignored")
 
     test_auth_me_authenticated_user()
     print(" [PASS] test_auth_me_authenticated_user")
@@ -684,6 +658,7 @@ if __name__ == "__main__":
     print("=" * 60)
     print("ALL ISOLATED AUTH, FARM, ADVISORY, FEEDBACK & KNOWLEDGE SOURCES TESTS PASSED!")
     print("=" * 60)
+
 
 
 
