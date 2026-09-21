@@ -244,6 +244,50 @@ def test_admin_user_ids_allowlist(mock_verify):
         assert data["admin"] is True
 
 
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_farms(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/admin/farms?page=1&page_size=25", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total" in data
+    assert "privacy_note" in data
+    assert "suppressed_groups" in data
+    # Verify no private sensitive fields in returned items
+    for item in data.get("items", []):
+        assert "user_id" not in item
+        assert "farmer_id" not in item
+        assert "email" not in item
+        assert "name" not in item
+        assert "village" not in item
+        assert "latitude" not in item
+        assert "longitude" not in item
+        assert "exact_area" not in item
+
+
+def test_admin_get_farms_unauthenticated():
+    response = client.get("/api/v1/admin/farms")
+    assert response.status_code == 401
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_farms_normal_user(mock_verify):
+    token = generate_test_jwt(user_id="usr-1", role="user")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/admin/farms", headers=headers)
+    assert response.status_code == 403
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_farms_invalid_page_size(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/admin/farms?page_size=500", headers=headers)
+    assert response.status_code == 422
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Running Isolated Admin Auth & User Management Suite...")
@@ -291,8 +335,20 @@ if __name__ == "__main__":
     test_admin_update_role_invalid_value()
     print(" [PASS] test_admin_update_role_invalid_value")
 
+    test_admin_get_farms()
+    print(" [PASS] test_admin_get_farms")
+
+    test_admin_get_farms_unauthenticated()
+    print(" [PASS] test_admin_get_farms_unauthenticated")
+
+    test_admin_get_farms_normal_user()
+    print(" [PASS] test_admin_get_farms_normal_user")
+
+    test_admin_get_farms_invalid_page_size()
+    print(" [PASS] test_admin_get_farms_invalid_page_size")
+
     print("=" * 60)
-    print("ALL ISOLATED AUTH & USER MANAGEMENT TESTS PASSED!")
+    print("ALL ISOLATED AUTH & FARM AGGREGATION TESTS PASSED!")
     print("=" * 60)
 
 

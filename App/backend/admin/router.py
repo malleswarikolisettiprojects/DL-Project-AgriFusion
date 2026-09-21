@@ -17,6 +17,7 @@ from App.backend.database.auth_db import (
     count_active_admins_in_db,
     fetch_all_supabase_predictions,
     fetch_all_users,
+    fetch_regional_farm_profiles,
     get_user_by_id,
     update_user_role_in_db,
     update_user_status_in_db,
@@ -54,6 +55,23 @@ class UpdateUserStatusRequest(BaseModel):
 
 class UpdateUserRoleRequest(BaseModel):
     role: UserRole
+
+
+class RegionalFarmProfile(BaseModel):
+    state: str
+    district: str
+    crop: Optional[str] = None
+    area_range: Optional[str] = None
+    irrigation_type: Optional[str] = None
+
+
+class RegionalFarmProfileResponse(BaseModel):
+    items: List[RegionalFarmProfile]
+    page: int
+    page_size: int
+    total: int
+    suppressed_groups: int = 0
+    privacy_note: str
 
 
 @admin_router.get("/overview")
@@ -247,6 +265,52 @@ async def update_user_role(
         "previous_role": previous_role,
         "message": f"User {user_id} role updated to {payload.role}",
     }
+
+
+@admin_router.get(
+    "/farms",
+    response_model=RegionalFarmProfileResponse,
+)
+async def get_regional_farm_profiles(
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    crop: Optional[str] = None,
+    irrigation_type: Optional[str] = None,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Retrieve privacy-preserving aggregated regional farm profile data.
+    Suppresses small groups below the privacy threshold (minimum 5 records) to protect farmer privacy.
+    Only returns minimized regional attributes (state, district, crop, area_range, irrigation_type).
+    """
+    # Audit logging for regional farm aggregation view
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="regional_farm_profiles_viewed",
+        target_type="farm_profiles",
+        safe_metadata={
+            "filters": {
+                "state": state,
+                "district": district,
+                "crop": crop,
+                "irrigation_type": irrigation_type,
+            },
+            "page": page,
+            "page_size": page_size,
+        },
+    )
+
+    data = fetch_regional_farm_profiles(
+        state=state,
+        district=district,
+        crop=crop,
+        irrigation_type=irrigation_type,
+        page=page,
+        page_size=page_size,
+    )
+    return data
 
 
 @admin_router.get("/audit-logs")
