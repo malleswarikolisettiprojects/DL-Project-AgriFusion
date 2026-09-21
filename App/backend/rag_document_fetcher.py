@@ -242,13 +242,36 @@ def fetch_and_cache_document(source: Dict) -> Optional[str]:
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-def load_all_verified_documents(max_sources: int = 6) -> List[Dict]:
+def load_all_verified_documents(max_sources: int = 12) -> List[Dict]:
     """
     Load text from all verified government/institute sources.
+    Includes both preconfigured static sources and dynamic canonical sources registered by admins.
     Returns list of {id, title, url, institute, text, tags}.
     Fetches in parallel threads for high performance.
     """
-    sources_to_fetch = VERIFIED_SOURCES[:max_sources]
+    sources_to_fetch = list(VERIFIED_SOURCES)
+
+    # Dynamically pull active, verified canonical sources registered by admins from frontend UI
+    try:
+        from App.backend.database.sources_db import fetch_knowledge_sources_list
+        reg_data = fetch_knowledge_sources_list(page=1, page_size=50)
+        reg_items = reg_data.get("items", [])
+        for item in reg_items:
+            v_stat = item.get("verification_status")
+            if item.get("is_active") and v_stat in ("verified", "verified_with_caveats"):
+                url = item.get("official_url")
+                if url and (url.startswith("http://") or url.startswith("https://")):
+                    sources_to_fetch.append({
+                        "id": f"dyn_{item.get('id')}",
+                        "title": item.get("title") or "Canonical Knowledge Source",
+                        "url": url,
+                        "tags": [item.get("crop") or "crop", item.get("subject") or "agronomy", item.get("organization") or "official"],
+                        "institute": item.get("organization") or "Agricultural Authority",
+                    })
+    except Exception as e:
+        print(f"[RAG Fetcher] Could not pull dynamic registry sources: {e}")
+
+    sources_to_fetch = sources_to_fetch[:max_sources]
     loaded = []
 
     def _worker(src):

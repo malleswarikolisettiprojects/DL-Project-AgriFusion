@@ -259,6 +259,8 @@ class RegisterSourceRequest(BaseModel):
     state_relevance: Optional[List[str]] = None
     language: Optional[str] = "English"
     verification_notes: Optional[str] = None
+    verification_status: Optional[VerificationStatus] = "pending_review"
+    index_status: Optional[IndexStatus] = "not_indexed"
 
 class UpdateSourceMetadataRequest(BaseModel):
     verification_status: Optional[VerificationStatus] = None
@@ -1005,6 +1007,9 @@ async def register_admin_knowledge_source(
         state_relevance=payload.state_relevance,
         language=payload.language or "English",
         verification_notes=payload.verification_notes,
+        initial_verification_status=payload.verification_status,
+        initial_index_status=payload.index_status,
+        admin_user_id=admin_user.id,
     )
 
     if not success:

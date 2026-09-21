@@ -390,10 +390,13 @@ def register_knowledge_source(
     state_relevance: Optional[List[str]] = None,
     language: Optional[str] = "English",
     verification_notes: Optional[str] = None,
+    initial_verification_status: Optional[str] = "pending_review",
+    initial_index_status: Optional[str] = "not_indexed",
+    admin_user_id: Optional[str] = None,
 ) -> Tuple[bool, Union[Dict[str, Any], str]]:
     """
     Register a new official website or document for RAG indexing.
-    Initial status: verification_status='pending_review', index_status='not_indexed'.
+    Supports direct admin verification and immediate queuing from frontend UI.
     """
     init_sources_db()
 
@@ -407,7 +410,13 @@ def register_knowledge_source(
 
     source_id = f"src-{uuid.uuid4().hex[:10]}"
     now_iso = datetime.now(timezone.utc).isoformat()
+    today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     st_list = state_relevance or ["All India"]
+
+    ver_status = initial_verification_status or "pending_review"
+    idx_status = initial_index_status or "not_indexed"
+    verified_date = today_date if ver_status in ("verified", "verified_with_caveats") else None
+    verified_by = admin_user_id if ver_status in ("verified", "verified_with_caveats") else None
 
     record = {
         "id": source_id,
@@ -420,14 +429,14 @@ def register_knowledge_source(
         "official_url": official_url.strip(),
         "document_format": "Web/PDF",
         "language": language or "English",
-        "verification_status": "pending_review",
-        "verified_date": None,
-        "verified_by_admin_id": None,
+        "verification_status": ver_status,
+        "verified_date": verified_date,
+        "verified_by_admin_id": verified_by,
         "verification_notes": verification_notes.strip() if verification_notes else None,
-        "last_indexed_at": None,
-        "index_status": "not_indexed",
+        "last_indexed_at": now_iso if idx_status == "queued" else None,
+        "index_status": idx_status,
         "is_active": True,
-        "needs_review": True,
+        "needs_review": ver_status == "pending_review",
         "caveats_json": json.dumps([]),
         "created_at": now_iso,
         "updated_at": now_iso,
