@@ -288,6 +288,66 @@ def test_admin_get_farms_invalid_page_size(mock_verify):
     assert response.status_code == 422
 
 
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_advisories(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/admin/advisories?page=1&page_size=25", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total" in data
+    assert "privacy_note" in data
+    for item in data.get("items", []):
+        assert "user_id" not in item
+        assert "farmer_id" not in item
+        assert "email" not in item
+        assert "phone" not in item
+        assert "ip_address" not in item
+
+
+def test_admin_get_advisories_unauthenticated():
+    response = client.get("/api/v1/admin/advisories")
+    assert response.status_code == 401
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_advisories_normal_user(mock_verify):
+    token = generate_test_jwt(user_id="usr-1", role="user")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/admin/advisories", headers=headers)
+    assert response.status_code == 403
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_review_advisory(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.patch(
+        "/api/v1/admin/advisories/q-100/review",
+        headers=headers,
+        json={"review_status": "needs_review", "note": "Source citation requires verification."},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["review_status"] == "needs_review"
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_add_advisory_note(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.post(
+        "/api/v1/admin/advisories/q-100/note",
+        headers=headers,
+        json={"note": "Reviewed by senior agronomist."},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Running Isolated Admin Auth & User Management Suite...")
@@ -347,8 +407,23 @@ if __name__ == "__main__":
     test_admin_get_farms_invalid_page_size()
     print(" [PASS] test_admin_get_farms_invalid_page_size")
 
+    test_admin_get_advisories()
+    print(" [PASS] test_admin_get_advisories")
+
+    test_admin_get_advisories_unauthenticated()
+    print(" [PASS] test_admin_get_advisories_unauthenticated")
+
+    test_admin_get_advisories_normal_user()
+    print(" [PASS] test_admin_get_advisories_normal_user")
+
+    test_admin_review_advisory()
+    print(" [PASS] test_admin_review_advisory")
+
+    test_admin_add_advisory_note()
+    print(" [PASS] test_admin_add_advisory_note")
+
     print("=" * 60)
-    print("ALL ISOLATED AUTH & FARM AGGREGATION TESTS PASSED!")
+    print("ALL ISOLATED AUTH, FARM AGGREGATION & ADVISORY AUDIT TESTS PASSED!")
     print("=" * 60)
 
 

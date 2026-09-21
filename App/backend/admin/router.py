@@ -12,6 +12,11 @@ from App.backend.auth.dependencies import (
     require_admin,
     require_roles,
 )
+from App.backend.database.advisories_db import (
+    add_advisory_note,
+    fetch_advisory_activities,
+    update_advisory_review_status,
+)
 from App.backend.database.audit import fetch_audit_logs, record_audit_event
 from App.backend.database.auth_db import (
     count_active_admins_in_db,
@@ -72,6 +77,64 @@ class RegionalFarmProfileResponse(BaseModel):
     total: int
     suppressed_groups: int = 0
     privacy_note: str
+
+
+AdvisoryActivityStatus = Literal["success", "no_verified_source", "failed", "partial"]
+AdvisoryReviewStatus = Literal["not_reviewed", "needs_review", "reviewed", "resolved"]
+
+
+class AdvisorySource(BaseModel):
+    title: str
+    organization: Optional[str] = None
+    url: Optional[str] = None
+    verified_date: Optional[str] = None
+
+
+class AdvisoryRetrievalInfo(BaseModel):
+    documents_considered: int
+    documents_used: int
+    relevance_threshold_passed: bool
+    no_verified_source: bool
+
+
+class AdvisoryComplianceInfo(BaseModel):
+    citations_present: bool
+    dose_claims_source_backed: bool
+    missing_dose_fields_flagged: bool
+    scheme_eligibility_qualified: bool
+    extension_confirmation_flagged: bool
+    compliance_status: str
+
+
+class AdvisoryActivityItem(BaseModel):
+    query_id: str
+    created_at: Optional[str] = None
+    crop: Optional[str] = None
+    state: Optional[str] = None
+    district: Optional[str] = None
+    query_summary: str
+    activity_status: AdvisoryActivityStatus
+    review_status: AdvisoryReviewStatus
+    retrieval: AdvisoryRetrievalInfo
+    sources: List[AdvisorySource] = []
+    compliance: AdvisoryComplianceInfo
+
+
+class AdvisoryActivityResponse(BaseModel):
+    items: List[AdvisoryActivityItem]
+    page: int
+    page_size: int
+    total: int
+    privacy_note: str
+
+
+class UpdateAdvisoryReviewRequest(BaseModel):
+    review_status: AdvisoryReviewStatus
+    note: Optional[str] = None
+
+
+class AddAdvisoryNoteRequest(BaseModel):
+    note: str
 
 
 @admin_router.get("/overview")
@@ -311,6 +374,107 @@ async def get_regional_farm_profiles(
         page_size=page_size,
     )
     return data
+
+
+@admin_router.get(
+    "/advisories",
+    response_model=AdvisoryActivityResponse,
+)
+async def get_admin_advisories(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    crop: Optional[str] = None,
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    status: Optional[str] = None,
+    review_status: Optional[str] = None,
+    source_verified: Optional[bool] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Retrieve anonymized farmer advisory RAG activity and agronomic quality compliance checks.
+    """
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="advisory_activity_viewed",
+        target_type="advisory_activity",
+        safe_metadata={
+            "page": page,
+            "page_size": page_size,
+            "crop": crop,
+            "state": state,
+            "status": status,
+            "review_status": review_status,
+        },
+    )
+
+    data = fetch_advisory_activities(
+        page=page,
+        page_size=page_size,
+        crop=crop,
+        state=state,
+        district=district,
+        status=status,
+        review_status=review_status,
+        source_verified=source_verified,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return data
+
+
+@admin_router.patch("/advisories/{query_id}/review")
+async def review_advisory_activity(
+    query_id: str,
+    payload: UpdateAdvisoryReviewRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Update review status of an advisory activity query."""
+    ok = update_advisory_review_status(query_id, payload.review_status, note=payload.note)
+    if payload.note:
+        add_advisory_note(query_id, admin_user.id, payload.note)
+
+    action_name = "advisory_marked_for_review" if payload.review_status == "needs_review" else "advisory_reviewed"
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action=action_name,
+        target_type="advisory_activity",
+        target_id=query_id,
+        safe_metadata={"review_status": payload.review_status},
+    )
+
+    return {
+        "status": "success",
+        "query_id": query_id,
+        "review_status": payload.review_status,
+        "message": f"Advisory query {query_id} review status updated to {payload.review_status}",
+    }
+
+
+@admin_router.post("/advisories/{query_id}/note")
+async def create_advisory_note(
+    query_id: str,
+    payload: AddAdvisoryNoteRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Attach an administrative review note to an advisory query."""
+    ok = add_advisory_note(query_id, admin_user.id, payload.note)
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="advisory_note_added",
+        target_type="advisory_activity",
+        target_id=query_id,
+        safe_metadata={"note_length": len(payload.note)},
+    )
+
+    return {
+        "status": "success",
+        "query_id": query_id,
+        "message": "Administrative note recorded successfully",
+    }
 
 
 @admin_router.get("/audit-logs")

@@ -39,6 +39,7 @@ from pydantic import BaseModel, Field
 
 from App.backend.climate_risk import predict_climate_risk
 from App.backend.crop import predict_crop
+from App.backend.database.advisories_db import log_advisory_activity
 from App.backend.database.database import supabase
 from App.backend.database.save_predictions import (
     save_climate_prediction,
@@ -171,6 +172,8 @@ class SaveRecordRequest(BaseModel):
 class AgentQueryRequest(BaseModel):
     query: str = Field(..., example="What is PM-KISAN scheme and how to apply?")
     crop: Optional[str] = Field(None, example="Rice")
+    state: Optional[str] = Field(None, example="Andhra Pradesh")
+    district: Optional[str] = Field(None, example="Visakhapatnam")
 
 
 # Base Endpoints
@@ -371,6 +374,19 @@ def api_agent_query(req: AgentQueryRequest):
     """
     try:
         res = query_agronomy_agent(req.query, crop=req.crop)
+
+        # Telemetry logging (non-blocking safeguard)
+        try:
+            log_advisory_activity(
+                query_text=req.query,
+                crop=req.crop,
+                state=req.state,
+                district=req.district,
+                rag_result=res,
+            )
+        except Exception as log_err:
+            logger.warning(f"Advisory telemetry logging failed non-blockingly: {log_err}")
+
         return {"status": "success", "agent_response": res}
     except Exception:
         raise HTTPException(500, "Agent query failed. Please try again.")
