@@ -149,6 +149,10 @@ async def get_optional_current_user(
     return await get_current_user(credentials)
 
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 async def require_admin(
     current_user: CurrentUser = Depends(get_current_user),
 ) -> CurrentUser:
@@ -159,8 +163,16 @@ async def require_admin(
     }
 
     is_admin = (
-        current_user.role in ("admin", "super_admin", "Super Admin", "Admin")
-        or current_user.id in configured_admin_ids
+        current_user.id in configured_admin_ids
+        or current_user.role in ("admin", "super_admin", "Super Admin", "Admin")
+    )
+
+    logger.info(
+        "Admin authorization check: user_id_present=%s, allowlist_configured=%s, role_claim=%s, is_admin=%s",
+        bool(current_user.id),
+        bool(configured_admin_ids),
+        current_user.role,
+        is_admin,
     )
 
     if not is_admin:
