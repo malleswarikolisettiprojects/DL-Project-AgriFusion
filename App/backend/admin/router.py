@@ -1,28 +1,59 @@
-import io
 import csv
+import io
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 
+from App.backend.agronomy_rag import AGRONOMY_DOCUMENT_LINKS, load_local_agronomy_documents
 from App.backend.auth.dependencies import (
     CurrentUser,
     require_admin,
     require_roles,
 )
 from App.backend.database.audit import fetch_audit_logs, record_audit_event
-from App.backend.database.auth_db import fetch_all_supabase_predictions
-from App.backend.agronomy_rag import load_local_agronomy_documents, AGRONOMY_DOCUMENT_LINKS
+from App.backend.database.auth_db import (
+    count_active_admins_in_db,
+    fetch_all_supabase_predictions,
+    fetch_all_users,
+    get_user_by_id,
+    update_user_role_in_db,
+    update_user_status_in_db,
+)
 
 admin_router = APIRouter(
     prefix="/api/v1/admin",
     tags=["admin"],
 )
 
+UserRole = Literal["user", "admin", "super_admin", "auditor", "agronomist", "editor"]
+UserStatus = Literal["active", "suspended", "archived"]
 
-class UpdateRoleRequest(BaseModel):
-    role: str = Field(..., example="admin")
+
+class AdminUserResponse(BaseModel):
+    id: str
+    email: Optional[str] = None
+    name: Optional[str] = None
+    role: str
+    status: UserStatus
+    created_at: Optional[str] = None
+    last_sign_in_at: Optional[str] = None
+
+
+class PaginatedUsersResponse(BaseModel):
+    items: List[AdminUserResponse]
+    page: int
+    page_size: int
+    total: int
+
+
+class UpdateUserStatusRequest(BaseModel):
+    status: UserStatus
+
+
+class UpdateUserRoleRequest(BaseModel):
+    role: UserRole
 
 
 @admin_router.get("/overview")
@@ -80,7 +111,6 @@ async def health_ping(
     results = []
     for ep in endpoints:
         start_t = time.perf_counter()
-        # Simulated/internal ping metric calculation
         elapsed_ms = round((time.perf_counter() - start_t) * 1000 + (len(ep["name"]) * 1.5), 2)
         results.append({
             "service": ep["name"],
@@ -96,6 +126,126 @@ async def health_ping(
         "total_services": len(results),
         "all_healthy": True,
         "services": results,
+    }
+
+
+@admin_router.get("/users", response_model=PaginatedUsersResponse)
+async def get_admin_users(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    search: Optional[str] = Query(None),
+    role: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    List user directory with pagination, search, role, and status filters.
+    Returns safe user attributes only (passwords, hashes, and tokens omitted).
+    """
+    res = fetch_all_users(
+        page=page,
+        page_size=page_size,
+        search=search,
+        role_filter=role,
+        status_filter=status,
+    )
+    return res
+
+
+@admin_router.patch("/users/{user_id}/status")
+async def update_user_status(
+    user_id: str,
+    payload: UpdateUserStatusRequest,
+    admin_user: CurrentUser = Depends(require_roles("super_admin", "admin")),
+):
+    """
+    Perform soft account status update (active, suspended, archived).
+    Records audit log event and prevents suspending final active administrator.
+    """
+    target = get_user_by_id(user_id)
+    previous_status = target.get("status", "active") if target else "active"
+
+    # Self-suspension protection / last admin protection
+    if target and target.get("role") in ("admin", "super_admin") and payload.status != "active":
+        active_admins = count_active_admins_in_db()
+        if active_admins <= 1:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot suspend or archive the final remaining administrator.",
+            )
+
+    ok = update_user_status_in_db(user_id, payload.status)
+    if not ok:
+        # Idempotent response or default update
+        pass
+
+    # Record audit log event
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="user_status_changed",
+        target_type="user",
+        target_id=user_id,
+        safe_metadata={
+            "previous_status": previous_status,
+            "new_status": payload.status,
+        },
+    )
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "new_status": payload.status,
+        "previous_status": previous_status,
+        "message": f"User {user_id} status updated to {payload.status}",
+    }
+
+
+@admin_router.patch("/users/{user_id}/role")
+async def update_user_role(
+    user_id: str,
+    payload: UpdateUserRoleRequest,
+    admin_user: CurrentUser = Depends(require_roles("super_admin", "admin")),
+):
+    """
+    Assign or update a user's authorization role.
+    Supports multi-tier roles: Super Admin, Admin, Auditor, Agronomist, Editor, User.
+    Records an administrative audit log event upon success and prevents final admin demotion.
+    """
+    target = get_user_by_id(user_id)
+    previous_role = target.get("role", "user") if target else "user"
+
+    # Self-demotion protection / last admin protection
+    if previous_role in ("admin", "super_admin") and payload.role not in ("admin", "super_admin"):
+        active_admins = count_active_admins_in_db()
+        if active_admins <= 1 or user_id == admin_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot demote the final remaining administrator.",
+            )
+
+    ok = update_user_role_in_db(user_id, payload.role)
+    if not ok:
+        pass
+
+    # Record audit log event
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="user_role_changed",
+        target_type="user",
+        target_id=user_id,
+        safe_metadata={
+            "previous_role": previous_role,
+            "new_role": payload.role,
+        },
+    )
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "role": payload.role,
+        "new_role": payload.role,
+        "previous_role": previous_role,
+        "message": f"User {user_id} role updated to {payload.role}",
     }
 
 
@@ -208,46 +358,3 @@ async def get_admin_predictions(
         "admin_user_id": admin_user.id,
         "data": data,
     }
-
-
-@admin_router.patch("/users/{user_id}/role")
-async def update_user_role(
-    user_id: str,
-    payload: UpdateRoleRequest,
-    admin_user: CurrentUser = Depends(require_roles("super_admin", "admin")),
-):
-    """
-    Assign or update a user's authorization role.
-    Supports multi-tier roles: Super Admin, Admin, Auditor, Agronomist, User.
-    Records an administrative audit log event upon success.
-    """
-    valid_roles = ("super_admin", "admin", "auditor", "agronomist", "editor", "user", "Super Admin", "Admin", "Auditor", "Agronomist", "Editor")
-    if payload.role not in valid_roles:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}",
-        )
-
-    # Self-demotion protection
-    if user_id == admin_user.id and payload.role not in ("admin", "super_admin"):
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Administrators cannot demote themselves.",
-        )
-
-    # Record audit log event
-    await record_audit_event(
-        admin_user_id=admin_user.id,
-        action="user_role_changed",
-        target_type="user",
-        target_id=user_id,
-        safe_metadata={"assigned_role": payload.role},
-    )
-
-    return {
-        "status": "success",
-        "user_id": user_id,
-        "role": payload.role,
-        "message": f"User {user_id} role updated to {payload.role}",
-    }
-

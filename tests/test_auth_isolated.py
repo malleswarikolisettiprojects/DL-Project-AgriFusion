@@ -165,6 +165,46 @@ def test_user_metadata_role_ignored():
 
 
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_users(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/admin/users?page=1&page_size=10", headers=headers)
+    assert response.status_code == 200
+    data = response.json()
+    assert "items" in data
+    assert "total" in data
+    assert data["page"] == 1
+    assert data["page_size"] == 10
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_update_status(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.patch(
+        "/api/v1/admin/users/usr-100/status",
+        headers=headers,
+        json={"status": "suspended"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert data["new_status"] == "suspended"
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_update_status_invalid_value(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.patch(
+        "/api/v1/admin/users/usr-100/status",
+        headers=headers,
+        json={"status": "invalid_status_value"},
+    )
+    assert response.status_code == 422
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
 def test_admin_update_role(mock_verify):
     token = generate_test_jwt(user_id="adm-1", role="admin")
     headers = {"Authorization": f"Bearer {token}"}
@@ -176,7 +216,19 @@ def test_admin_update_role(mock_verify):
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "success"
-    assert data["role"] == "editor"
+    assert data["new_role"] == "editor"
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_update_role_invalid_value(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.patch(
+        "/api/v1/admin/users/usr-100/role",
+        headers=headers,
+        json={"role": "invalid_role_value"},
+    )
+    assert response.status_code == 422
 
 
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
@@ -194,7 +246,7 @@ def test_admin_user_ids_allowlist(mock_verify):
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("Running Isolated Admin Auth Verification Suite...")
+    print("Running Isolated Admin Auth & User Management Suite...")
     print("=" * 60)
 
     test_user_metadata_role_ignored()
@@ -224,10 +276,24 @@ if __name__ == "__main__":
     test_admin_check_endpoint()
     print(" [PASS] test_admin_check_endpoint")
 
+    test_admin_get_users()
+    print(" [PASS] test_admin_get_users")
+
+    test_admin_update_status()
+    print(" [PASS] test_admin_update_status")
+
+    test_admin_update_status_invalid_value()
+    print(" [PASS] test_admin_update_status_invalid_value")
+
     test_admin_update_role()
     print(" [PASS] test_admin_update_role")
 
+    test_admin_update_role_invalid_value()
+    print(" [PASS] test_admin_update_role_invalid_value")
+
     print("=" * 60)
-    print("ALL ISOLATED AUTH TESTS PASSED SUCCESSFULLY!")
+    print("ALL ISOLATED AUTH & USER MANAGEMENT TESTS PASSED!")
     print("=" * 60)
+
+
 
