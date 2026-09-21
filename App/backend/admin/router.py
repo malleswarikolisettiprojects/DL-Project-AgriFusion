@@ -18,6 +18,12 @@ from App.backend.database.advisories_db import (
     update_advisory_review_status,
 )
 from App.backend.database.audit import fetch_audit_logs, record_audit_event
+from App.backend.database.feedback_db import (
+    add_feedback_review_note,
+    fetch_farmer_feedback_list,
+    get_farmer_feedback_detail,
+    update_farmer_feedback_record,
+)
 from App.backend.database.auth_db import (
     count_active_admins_in_db,
     fetch_all_supabase_predictions,
@@ -135,6 +141,42 @@ class UpdateAdvisoryReviewRequest(BaseModel):
 
 class AddAdvisoryNoteRequest(BaseModel):
     note: str
+
+
+FeedbackStatus = Literal["new", "under_review", "resolved", "rejected"]
+FeedbackPriority = Literal["low", "normal", "high", "urgent"]
+
+
+class AdminFeedbackItem(BaseModel):
+    id: str
+    advisory_id: Optional[str] = None
+    created_at: Optional[str] = None
+    rating: int
+    category: str
+    message: str
+    language: Optional[str] = "English"
+    status: FeedbackStatus
+    priority: FeedbackPriority
+    admin_note_count: int = 0
+    identity_redacted: bool = True
+
+
+class AdminFeedbackListResponse(BaseModel):
+    items: List[AdminFeedbackItem]
+    page: int
+    page_size: int
+    total: int
+    rating_distribution: Dict[str, int]
+    privacy_note: str
+
+
+class UpdateFeedbackRequest(BaseModel):
+    status: Optional[FeedbackStatus] = None
+    priority: Optional[FeedbackPriority] = None
+
+
+class AddFeedbackReviewNoteRequest(BaseModel):
+    note: str = Field(..., min_length=1, max_length=4000)
 
 
 @admin_router.get("/overview")
@@ -475,6 +517,124 @@ async def create_advisory_note(
         "query_id": query_id,
         "message": "Administrative note recorded successfully",
     }
+
+
+@admin_router.get(
+    "/feedback",
+    response_model=AdminFeedbackListResponse,
+)
+async def get_admin_feedback_list(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    status: Optional[str] = None,
+    category: Optional[str] = None,
+    priority: Optional[str] = None,
+    rating: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Retrieve paginated farmer feedback with identity minimized and rating distributions.
+    """
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="feedback_list_viewed",
+        target_type="farmer_feedback",
+        safe_metadata={"page": page, "page_size": page_size, "status": status, "priority": priority},
+    )
+
+    data = fetch_farmer_feedback_list(
+        page=page,
+        page_size=page_size,
+        status=status,
+        category=category,
+        priority=priority,
+        rating=rating,
+        start_date=start_date,
+        end_date=end_date,
+        search=search,
+    )
+    return data
+
+
+@admin_router.get("/feedback/{feedback_id}")
+async def get_admin_feedback_detail(
+    feedback_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Retrieve detailed feedback report and review note history."""
+    item = get_farmer_feedback_detail(feedback_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Feedback record not found.")
+    return item
+
+
+@admin_router.patch("/feedback/{feedback_id}")
+async def update_admin_feedback(
+    feedback_id: str,
+    payload: UpdateFeedbackRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Update feedback status and/or priority."""
+    if payload.status is None and payload.priority is None:
+        raise HTTPException(status_code=422, detail="At least one field ('status' or 'priority') must be provided.")
+
+    updated = update_farmer_feedback_record(
+        feedback_id=feedback_id,
+        admin_user_id=admin_user.id,
+        status=payload.status,
+        priority=payload.priority,
+    )
+    if not updated:
+        raise HTTPException(status_code=404, detail="Feedback record not found.")
+
+    if payload.status is not None:
+        await record_audit_event(
+            admin_user_id=admin_user.id,
+            action="feedback_status_changed",
+            target_type="farmer_feedback",
+            target_id=feedback_id,
+            safe_metadata={"status": payload.status},
+        )
+    if payload.priority is not None:
+        await record_audit_event(
+            admin_user_id=admin_user.id,
+            action="feedback_priority_changed",
+            target_type="farmer_feedback",
+            target_id=feedback_id,
+            safe_metadata={"priority": payload.priority},
+        )
+
+    return updated
+
+
+@admin_router.post("/feedback/{feedback_id}/note")
+async def add_admin_feedback_note(
+    feedback_id: str,
+    payload: AddFeedbackReviewNoteRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Add an administrative review note to a farmer feedback report."""
+    if not payload.note or not payload.note.strip():
+        raise HTTPException(status_code=422, detail="Note content cannot be empty.")
+    if len(payload.note) > 4000:
+        raise HTTPException(status_code=422, detail="Note length exceeds maximum allowed 4000 characters.")
+
+    note_obj = add_feedback_review_note(feedback_id, admin_user.id, payload.note)
+    if not note_obj:
+        raise HTTPException(status_code=404, detail="Feedback record not found.")
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="feedback_review_note_added",
+        target_type="farmer_feedback",
+        target_id=feedback_id,
+        safe_metadata={"note_length": len(payload.note)},
+    )
+
+    return note_obj
 
 
 @admin_router.get("/audit-logs")

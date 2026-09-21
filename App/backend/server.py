@@ -19,7 +19,7 @@ import uuid
 import warnings
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 from App.backend.climate_risk import predict_climate_risk
 from App.backend.crop import predict_crop
 from App.backend.database.advisories_db import log_advisory_activity
+from App.backend.database.feedback_db import create_farmer_feedback
 from App.backend.database.database import supabase
 from App.backend.database.save_predictions import (
     save_climate_prediction,
@@ -174,6 +175,26 @@ class AgentQueryRequest(BaseModel):
     crop: Optional[str] = Field(None, example="Rice")
     state: Optional[str] = Field(None, example="Andhra Pradesh")
     district: Optional[str] = Field(None, example="Visakhapatnam")
+
+
+FeedbackCategory = Literal[
+    "incorrect_answer",
+    "missing_information",
+    "outdated_source",
+    "wrong_language",
+    "unclear_advice",
+    "image_quality_problem",
+    "technical_error",
+    "other",
+]
+
+
+class CreateFeedbackRequest(BaseModel):
+    advisory_id: Optional[str] = Field(None, example="adv-101")
+    rating: int = Field(..., ge=1, le=5, example=4)
+    category: FeedbackCategory = Field(..., example="incorrect_answer")
+    message: str = Field(..., min_length=1, max_length=2000, example="The advisory response did not include dosage information.")
+    language: Optional[str] = Field("English", example="English")
 
 
 # Base Endpoints
@@ -390,6 +411,30 @@ def api_agent_query(req: AgentQueryRequest):
         return {"status": "success", "agent_response": res}
     except Exception:
         raise HTTPException(500, "Agent query failed. Please try again.")
+
+
+# 6c. Farmer Advisory Feedback Submission API
+@app.post("/api/v1/feedback")
+def api_submit_feedback(req: CreateFeedbackRequest):
+    """
+    Farmer Feedback Submission Endpoint.
+    Stores farmer feedback securely without exposing sensitive personal data.
+    """
+    try:
+        record = create_farmer_feedback(
+            rating=req.rating,
+            category=req.category,
+            message=req.message,
+            advisory_id=req.advisory_id,
+            language=req.language,
+        )
+        return {
+            "status": "success",
+            "message": "Feedback submitted successfully",
+            "feedback_id": record["id"],
+        }
+    except Exception:
+        raise HTTPException(500, "Feedback submission failed. Please try again.")
 
 
 @app.get("/api/v1/rag/documents")

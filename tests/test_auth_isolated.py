@@ -27,9 +27,12 @@ from App.backend.admin.router import admin_router
 with patch("App.backend.admin.router.load_local_agronomy_documents", return_value=[]):
     pass
 
+from App.backend.server import api_submit_feedback
+
 app = FastAPI()
 app.include_router(auth_router)
 app.include_router(admin_router)
+app.add_api_route("/api/v1/feedback", api_submit_feedback, methods=["POST"])
 
 client = TestClient(app)
 
@@ -348,6 +351,87 @@ def test_admin_add_advisory_note(mock_verify):
     assert data["status"] == "success"
 
 
+def test_submit_farmer_feedback():
+    response = client.post(
+        "/api/v1/feedback",
+        json={
+            "advisory_id": "adv-101",
+            "rating": 4,
+            "category": "missing_information",
+            "message": "Answer lacked specific fertilizer dosage.",
+            "language": "English",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "success"
+    assert "feedback_id" in data
+
+
+def test_admin_get_feedback_unauthenticated():
+    response = client.get("/api/v1/admin/feedback")
+    assert response.status_code == 401
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_feedback_normal_user(mock_verify):
+    token = generate_test_jwt(user_id="usr-1", role="user")
+    headers = {"Authorization": f"Bearer {token}"}
+    response = client.get("/api/v1/admin/feedback", headers=headers)
+    assert response.status_code == 403
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_feedback_workflow(mock_verify):
+    # 1. Submit feedback
+    fb_res = client.post(
+        "/api/v1/feedback",
+        json={
+            "advisory_id": "adv-202",
+            "rating": 2,
+            "category": "incorrect_answer",
+            "message": "Dose was too high.",
+        },
+    )
+    assert fb_res.status_code == 200
+    fb_id = fb_res.json()["feedback_id"]
+
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # 2. List feedback
+    list_res = client.get("/api/v1/admin/feedback", headers=headers)
+    assert list_res.status_code == 200
+    list_data = list_res.json()
+    assert "items" in list_data
+    assert "rating_distribution" in list_data
+
+    # 3. Get detail
+    detail_res = client.get(f"/api/v1/admin/feedback/{fb_id}", headers=headers)
+    assert detail_res.status_code == 200
+    detail_data = detail_res.json()
+    assert detail_data["id"] == fb_id
+
+    # 4. Update status & priority
+    patch_res = client.patch(
+        f"/api/v1/admin/feedback/{fb_id}",
+        headers=headers,
+        json={"status": "under_review", "priority": "high"},
+    )
+    assert patch_res.status_code == 200
+    assert patch_res.json()["status"] == "under_review"
+    assert patch_res.json()["priority"] == "high"
+
+    # 5. Add note
+    note_res = client.post(
+        f"/api/v1/admin/feedback/{fb_id}/note",
+        headers=headers,
+        json={"note": "Checking dosage guidelines against ICAR handbook."},
+    )
+    assert note_res.status_code == 200
+    assert "id" in note_res.json()
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Running Isolated Admin Auth & User Management Suite...")
@@ -422,8 +506,20 @@ if __name__ == "__main__":
     test_admin_add_advisory_note()
     print(" [PASS] test_admin_add_advisory_note")
 
+    test_submit_farmer_feedback()
+    print(" [PASS] test_submit_farmer_feedback")
+
+    test_admin_get_feedback_unauthenticated()
+    print(" [PASS] test_admin_get_feedback_unauthenticated")
+
+    test_admin_get_feedback_normal_user()
+    print(" [PASS] test_admin_get_feedback_normal_user")
+
+    test_admin_feedback_workflow()
+    print(" [PASS] test_admin_feedback_workflow")
+
     print("=" * 60)
-    print("ALL ISOLATED AUTH, FARM AGGREGATION & ADVISORY AUDIT TESTS PASSED!")
+    print("ALL ISOLATED AUTH, FARM, ADVISORY & FEEDBACK AUDIT TESTS PASSED!")
     print("=" * 60)
 
 
