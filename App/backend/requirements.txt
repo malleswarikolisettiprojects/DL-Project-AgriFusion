@@ -6,6 +6,7 @@ requests>=2.31.0
 python-dotenv>=1.0.0
 supabase>=2.0.0
 bcrypt>=4.0.0
+PyJWT[crypto]>=2.8.0
 pydantic>=2.0.0
 geopy>=2.4.0
 openmeteo-requests>=1.1.0

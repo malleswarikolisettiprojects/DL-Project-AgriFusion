@@ -55,6 +55,14 @@ from App.backend.schemes import recommend_schemes
 from App.backend.yields import predict_yield
 from App.backend.agronomy_rag import query_agronomy_agent, load_local_agronomy_documents, AGRONOMY_DOCUMENT_LINKS
 from App.backend.settings import FRONTEND_URL, get_config_status
+from App.backend.auth.router import router as auth_router
+from App.backend.admin.router import admin_router
+from App.backend.auth.dependencies import (
+    CurrentUser,
+    get_current_user,
+    get_optional_current_user,
+    require_admin,
+)
 
 app = FastAPI(
     title="AgriFusion Unified Backend REST API",
@@ -62,18 +70,28 @@ app = FastAPI(
     version="2.0.0",
 )
 
-# ── CORS ──────────────────────────────────────────────────────────────────────
-frontend_url = os.getenv("FRONTEND_URL", "")
+app.include_router(auth_router)
+app.include_router(admin_router)
 
-# Allow all origins (*) during preview/dev so Google AI Studio & local apps connect before publishing
-allowed_origins = [frontend_url.rstrip("/")] if (frontend_url and frontend_url != "*") else ["*"]
+# ── CORS ──────────────────────────────────────────────────────────────────────
+allowed_origins = [
+    "http://localhost:5173",
+    "http://localhost:3000",
+]
+frontend_url = os.getenv("FRONTEND_URL")
+if frontend_url:
+    allowed_origins.append(frontend_url.rstrip("/"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
+    allow_origins=allowed_origins if frontend_url else ["*"],
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["*"],
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "Accept",
+    ],
 )
 
 
@@ -146,7 +164,6 @@ class PipelineRequest(BaseModel):
 
 
 class SaveRecordRequest(BaseModel):
-    user_email: str = Field(..., example="farmer@agrifusion.com")
     record_type: str = Field(..., example="pipeline_prediction")
     record_data: Dict[str, Any] = Field(...)
 
@@ -185,12 +202,16 @@ def health():
 
 # 1. Crop Recommendation API
 @app.post("/api/v1/predict/crop")
-def api_predict_crop(req: CropRequest, x_user_email: Optional[str] = Header(None)):
+def api_predict_crop(
+    req: CropRequest,
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
     try:
+        user_email = current_user.email if current_user else None
         payload = {"state": req.state, "district": req.district, "village": req.village, "start_date": req.sowing_date}
         result = predict_crop(payload)
         # Persist prediction (not recommendations)
-        save_crop_prediction({**result, "user_email": x_user_email})
+        save_crop_prediction({**result, "user_email": user_email})
         return {"status": "success", "result": result}
     except Exception:
         raise HTTPException(500, "Crop prediction failed. Please try again.")
@@ -198,7 +219,10 @@ def api_predict_crop(req: CropRequest, x_user_email: Optional[str] = Header(None
 
 # 2. Climate Risk API
 @app.post("/api/v1/predict/climate")
-def api_predict_climate(req: ClimateRiskRequest, x_user_email: Optional[str] = Header(None)):
+def api_predict_climate(
+    req: ClimateRiskRequest,
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
     request_id = str(uuid.uuid4())
     logger.info("[%s] Climate request: state=%s district=%s crop=%s sowing_date=%s",
                 request_id, req.state, req.district, req.crop, req.sowing_date)
@@ -223,8 +247,12 @@ def api_predict_climate(req: ClimateRiskRequest, x_user_email: Optional[str] = H
 
 # 3. Irrigation & Water Needs API
 @app.post("/api/v1/predict/irrigation")
-def api_predict_irrigation(req: IrrigationRequest, x_user_email: Optional[str] = Header(None)):
+def api_predict_irrigation(
+    req: IrrigationRequest,
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
     try:
+        user_email = current_user.email if current_user else None
         payload = {
             "state": req.state,
             "district": req.district,
@@ -234,7 +262,7 @@ def api_predict_irrigation(req: IrrigationRequest, x_user_email: Optional[str] =
             "pump_hp": req.pump_hp,
         }
         result = predict_irrigation(payload)
-        save_irrigation_prediction({**result, "user_email": x_user_email})
+        save_irrigation_prediction({**result, "user_email": user_email})
         return {"status": "success", "result": result}
     except Exception:
         raise HTTPException(500, "Irrigation prediction failed. Please try again.")
@@ -242,8 +270,12 @@ def api_predict_irrigation(req: IrrigationRequest, x_user_email: Optional[str] =
 
 # 4. Harvest Yield API
 @app.post("/api/v1/predict/yield")
-def api_predict_yield(req: YieldRequest, x_user_email: Optional[str] = Header(None)):
+def api_predict_yield(
+    req: YieldRequest,
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
     try:
+        user_email = current_user.email if current_user else None
         payload = {
             "state": req.state,
             "district": req.district,
@@ -253,7 +285,7 @@ def api_predict_yield(req: YieldRequest, x_user_email: Optional[str] = Header(No
             "year": req.year,
         }
         result = predict_yield(payload)
-        save_yield_prediction({**result, "user_email": x_user_email})
+        save_yield_prediction({**result, "user_email": user_email})
         return {"status": "success", "result": result}
     except Exception:
         raise HTTPException(500, "Yield prediction failed. Please try again.")
@@ -261,8 +293,12 @@ def api_predict_yield(req: YieldRequest, x_user_email: Optional[str] = Header(No
 
 # 5. Market Price API
 @app.post("/api/v1/predict/market")
-def api_predict_market(req: MarketRequest, x_user_email: Optional[str] = Header(None)):
+def api_predict_market(
+    req: MarketRequest,
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
     try:
+        user_email = current_user.email if current_user else None
         result = predict_market_price(
             state=req.state,
             district=req.district,
@@ -274,7 +310,7 @@ def api_predict_market(req: MarketRequest, x_user_email: Optional[str] = Header(
             year=req.year,
             market_date=req.market_date,
         )
-        save_market_prediction({**result, "user_email": x_user_email})
+        save_market_prediction({**result, "user_email": user_email})
         return {"status": "success", "result": result}
     except Exception:
         raise HTTPException(500, "Market price prediction failed. Please try again.")
@@ -285,9 +321,10 @@ def api_predict_market(req: MarketRequest, x_user_email: Optional[str] = Header(
 async def api_predict_disease(
     crop: str = Form(...),
     image: UploadFile = File(...),
-    x_user_email: Optional[str] = Header(None),
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
     try:
+        user_email = current_user.email if current_user else None
         raw = await image.read()
         content_type = (image.content_type or "image/jpeg").lower()
         result = predict_disease_and_pests(
@@ -304,7 +341,7 @@ async def api_predict_disease(
             for d in (top_detections + secondary)
         ]
         save_disease_prediction({
-            "user_email":              x_user_email,
+            "user_email":              user_email,
             "crop":                    crop,
             "top_disease":             top_disease.get("label"),
             "top_disease_confidence":  top_disease.get("confidence"),
@@ -452,13 +489,17 @@ def api_run_pipeline(req: PipelineRequest):
 
 # 9. Farmer History Persistence APIs
 @app.post("/api/v1/farm/save-record")
-def api_save_record(req: SaveRecordRequest):
+def api_save_record(
+    req: SaveRecordRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
     if not supabase:
         return {"status": "warning", "message": "Supabase database connection is not configured", "record_id": None}
     try:
+        user_email = current_user.email or current_user.id
         record = {
             "id": str(uuid.uuid4()),
-            "user_email": req.user_email,
+            "user_email": user_email,
             "record_type": req.record_type,
             "data": req.record_data,
             "created_at": datetime.now(timezone.utc).isoformat(),
@@ -470,10 +511,13 @@ def api_save_record(req: SaveRecordRequest):
 
 
 @app.get("/api/v1/farm/records")
-def api_get_records(user_email: str):
+def api_get_records(
+    current_user: CurrentUser = Depends(get_current_user),
+):
     if not supabase:
         return {"status": "warning", "message": "Supabase connection not active", "records": []}
     try:
+        user_email = current_user.email or current_user.id
         res = supabase.table("user_farm_records").select("*").eq("user_email", user_email).execute()
         return {"status": "success", "records": res.data or []}
     except Exception:
@@ -481,7 +525,9 @@ def api_get_records(user_email: str):
 
 
 @app.get("/api/v1/farm/monthly-summary")
-def api_monthly_summary(user_email: str):
+def api_monthly_summary(
+    current_user: CurrentUser = Depends(get_current_user),
+):
     """
     Returns a month-by-month activity summary for a logged-in farmer.
     Includes:
@@ -490,6 +536,8 @@ def api_monthly_summary(user_email: str):
     """
     if not supabase:
         return {"status": "warning", "message": "Supabase not connected", "months": {}}
+
+    user_email = current_user.email or current_user.id
 
     try:
         from calendar import month_name as MONTH_NAMES

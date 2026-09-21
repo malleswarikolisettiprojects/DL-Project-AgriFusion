@@ -1083,13 +1083,34 @@ def predict_yield(input_data):
     # 27. RETURN RESULT
     # ========================================================
 
+    total_tonnes = round(float(total_yield), 2)
+    total_quintals = round(total_tonnes * 10, 2)
+    bags_50kg = int(round(total_quintals * 2))
+    yield_q_per_ha = round(float(predicted_yield) * 10, 2)
+    yield_q_per_acre = round((float(predicted_yield) * 10) / 2.47105, 2)
+
     return {
 
         "predicted_yield":
             predicted_yield,
 
+        "yield_q_per_ha":
+            yield_q_per_ha,
+
+        "yield_q_per_acre":
+            yield_q_per_acre,
+
         "total_yield":
             total_yield,
+
+        "total_tonnes":
+            total_tonnes,
+
+        "total_quintals":
+            total_quintals,
+
+        "bags_50kg":
+            bags_50kg,
 
         "arrival_quantity":
             arrival_quantity,
