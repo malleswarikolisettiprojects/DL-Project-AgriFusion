@@ -39,8 +39,10 @@ from pydantic import BaseModel, Field
 
 from App.backend.climate_risk import predict_climate_risk
 from App.backend.crop import predict_crop
-from App.backend.database.advisories_db import log_advisory_activity
-from App.backend.database.feedback_db import create_farmer_feedback
+from App.backend.database.advisories_db import init_advisories_db, log_advisory_activity
+from App.backend.database.feedback_db import create_farmer_feedback, init_feedback_db
+from App.backend.database.sources_db import fetch_knowledge_sources_list, init_sources_db, register_knowledge_source
+from App.backend.database.schemes_db import init_schemes_db
 from App.backend.database.database import supabase
 from App.backend.database.save_predictions import (
     save_climate_prediction,
@@ -71,6 +73,19 @@ app = FastAPI(
     description="AI Precision Decision Support System for Agriculture — Andhra Pradesh & Telangana",
     version="2.0.0",
 )
+
+@app.on_event("startup")
+def startup_db_init():
+    """Ensure all registry database tables (sources, schemes, advisories, feedback) are initialized and seeded on app boot."""
+    try:
+        init_sources_db()
+        init_schemes_db()
+        init_advisories_db()
+        init_feedback_db()
+        load_local_agronomy_documents()
+        logger.info("AgriFusion database registries and RAG documents initialized successfully.")
+    except Exception as err:
+        logger.warning(f"Error during startup DB initialization: {err}")
 
 app.include_router(auth_router)
 app.include_router(admin_router)
@@ -747,6 +762,128 @@ def api_monthly_summary(
 
     except Exception:
         raise HTTPException(500, "Monthly summary failed. Please try again.")
+
+
+# ── RAG Knowledge Sources Endpoints (Public / Frontend Access) ────────────────
+@app.get("/api/v1/rag/sources")
+def get_public_knowledge_sources(
+    page: int = 1,
+    page_size: int = 25,
+    search: Optional[str] = None,
+    crop: Optional[str] = None,
+    state: Optional[str] = None,
+):
+    """Public endpoint for listing active canonical agricultural knowledge sources."""
+    return fetch_knowledge_sources_list(
+        page=page,
+        page_size=page_size,
+        search=search,
+        crop=crop,
+        state=state,
+        verification_status="verified",
+    )
+
+
+class RegisterWebsiteRequest(BaseModel):
+    official_url: str
+    title: str
+    organization: Optional[str] = "Official Agricultural Source"
+    crop: Optional[str] = "All Crops"
+    state_relevance: Optional[List[str]] = None
+
+
+@app.post("/api/v1/rag/sources/register-website", status_code=201)
+def register_website_knowledge_source(payload: RegisterWebsiteRequest):
+    """
+    Register a website URL into the AgriFusion RAG Knowledge Sources registry.
+    Scrapes the site, indexes the content, and forces local document cache refresh.
+    """
+    url = payload.official_url.strip()
+    if not (url.startswith("http://") or url.startswith("https://")):
+        raise HTTPException(422, "Official website URL must start with http:// or https://")
+
+    success, result = register_knowledge_source(
+        title=payload.title,
+        organization=payload.organization or "Web Resource",
+        source_type="website_url",
+        official_url=url,
+        subject="Agricultural Web Advisory",
+        crop=payload.crop,
+        state_relevance=payload.state_relevance or ["All India"],
+        language="English",
+        verification_notes="Registered via frontend user registration endpoint.",
+        initial_verification_status="verified",
+        initial_index_status="indexed",
+    )
+
+    if not success:
+        if "Duplicate" in str(result):
+            raise HTTPException(409, str(result))
+        raise HTTPException(422, str(result))
+
+    load_local_agronomy_documents(force_reload=True)
+
+    return {
+        "status": "success",
+        "message": f"Website '{url}' successfully registered and indexed into RAG Knowledge Sources.",
+        "source": result,
+    }
+
+
+@app.post("/api/v1/rag/sources/upload-document", status_code=201)
+async def upload_document_knowledge_source(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    organization: Optional[str] = Form("Agricultural Knowledge Source"),
+    crop: Optional[str] = Form("All Crops"),
+    state_relevance: Optional[str] = Form("All India"),
+):
+    """
+    Upload a document (PDF, DOCX, TXT, MD) into RAG Knowledge Base.
+    Saves to Data/agronomy_docs/ and forces dynamic document cache refresh.
+    """
+    if not file.filename:
+        raise HTTPException(400, "Filename missing in upload request.")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".pdf", ".docx", ".txt", ".md"}:
+        raise HTTPException(400, f"Unsupported document format '{ext}'. Allowed formats: PDF, DOCX, TXT, MD.")
+
+    contents = await file.read()
+    if len(contents) > 15 * 1024 * 1024:
+        raise HTTPException(400, "File size exceeds maximum allowed 15MB.")
+
+    base_dir = Path(__file__).resolve().parents[2]
+    docs_dir = base_dir / "Data" / "agronomy_docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    safe_filename = Path(file.filename).name
+    save_path = docs_dir / safe_filename
+    save_path.write_bytes(contents)
+
+    doc_title = title.strip() if title else safe_filename
+    states = [s.strip() for s in state_relevance.split(",") if s.strip()] if state_relevance else ["All India"]
+
+    success, result = register_knowledge_source(
+        title=doc_title,
+        organization=organization or "User Upload",
+        source_type="custom_upload",
+        official_url=f"file://{save_path}",
+        subject="User Uploaded Agronomy Document",
+        crop=crop,
+        state_relevance=states,
+        language="English",
+        verification_notes="Uploaded via frontend document upload endpoint.",
+        initial_verification_status="verified",
+        initial_index_status="indexed",
+    )
+
+    load_local_agronomy_documents(force_reload=True)
+
+    return {
+        "status": "success",
+        "message": f"Document '{safe_filename}' successfully uploaded and indexed into RAG Knowledge Sources.",
+        "source": result,
+    }
 
 
 if __name__ == "__main__":

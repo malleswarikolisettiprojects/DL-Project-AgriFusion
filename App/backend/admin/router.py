@@ -3,7 +3,7 @@ import io
 import time
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field
 
 from App.backend.agronomy_rag import AGRONOMY_DOCUMENT_LINKS, load_local_agronomy_documents
@@ -25,6 +25,7 @@ from App.backend.database.feedback_db import (
     update_farmer_feedback_record,
 )
 from App.backend.database.sources_db import (
+    delete_knowledge_source,
     fetch_knowledge_sources_list,
     get_knowledge_source_detail,
     reindex_knowledge_source,
@@ -1120,6 +1121,105 @@ async def trigger_reindex_source(
     )
 
     return result
+
+
+@admin_router.post("/sources/upload-document", status_code=201)
+async def upload_admin_knowledge_document(
+    file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
+    organization: Optional[str] = Form("Agricultural Research Institute"),
+    subject: Optional[str] = Form("Crop Management & Disease Advice"),
+    crop: Optional[str] = Form("All Crops"),
+    state_relevance: Optional[str] = Form("All India"),
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Upload a document (PDF, DOCX, TXT, MD) into the RAG agronomy knowledge base.
+    Saves the file to Data/agronomy_docs/, registers it in knowledge_sources DB registry,
+    and forces re-indexing of RAG documents.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Filename missing in upload request.")
+
+    ext = Path(file.filename).suffix.lower()
+    if ext not in {".pdf", ".docx", ".txt", ".md"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported document format '{ext}'. Allowed formats: PDF, DOCX, TXT, MD.")
+
+    contents = await file.read()
+    if len(contents) > 15 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="File size exceeds maximum allowed 15MB.")
+
+    base_dir = Path(__file__).resolve().parents[2]
+    docs_dir = base_dir / "Data" / "agronomy_docs"
+    docs_dir.mkdir(parents=True, exist_ok=True)
+    safe_filename = Path(file.filename).name
+    save_path = docs_dir / safe_filename
+    save_path.write_bytes(contents)
+
+    doc_title = title.strip() if title else safe_filename
+    states = [s.strip() for s in state_relevance.split(",") if s.strip()] if state_relevance else ["All India"]
+
+    success, result = register_knowledge_source(
+        title=doc_title,
+        organization=organization or "Custom Upload",
+        source_type="custom_upload",
+        official_url=f"file://{save_path}",
+        subject=subject,
+        crop=crop,
+        state_relevance=states,
+        language="English",
+        verification_notes=f"Uploaded by admin {admin_user.id}",
+        initial_verification_status="verified",
+        initial_index_status="indexed",
+        admin_user_id=admin_user.id,
+    )
+
+    load_local_agronomy_documents(force_reload=True)
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="document_uploaded_to_rag",
+        target_type="knowledge_source",
+        target_id=result.get("id") if isinstance(result, dict) else None,
+        safe_metadata={"filename": safe_filename, "size_bytes": len(contents)},
+    )
+
+    return {
+        "status": "success",
+        "message": f"Document '{safe_filename}' successfully uploaded and indexed into RAG Knowledge Sources.",
+        "source": result,
+    }
+
+
+@admin_router.delete("/sources/{source_id}")
+async def delete_admin_knowledge_source(
+    source_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Delete a knowledge source by ID."""
+    existing = get_knowledge_source_detail(source_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Knowledge source '{source_id}' not found.")
+
+    deleted = delete_knowledge_source(source_id)
+    if not deleted:
+        raise HTTPException(status_code=500, detail="Failed to delete knowledge source record.")
+
+    load_local_agronomy_documents(force_reload=True)
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="source_deleted",
+        target_type="knowledge_source",
+        target_id=source_id,
+        safe_metadata={"title": existing.get("title")},
+    )
+
+    return {
+        "status": "success",
+        "source_id": source_id,
+        "message": f"Knowledge source '{source_id}' deleted successfully.",
+    }
 
 
 @admin_router.get(

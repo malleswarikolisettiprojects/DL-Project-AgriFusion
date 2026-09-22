@@ -581,3 +581,25 @@ def reindex_knowledge_source(source_id: str, admin_user_id: str) -> Tuple[bool, 
         "index_status": "queued",
         "message": "Source reindex requested. Completion status will be updated separately.",
     }
+
+
+def delete_knowledge_source(source_id: str) -> bool:
+    """Delete a knowledge source entry by ID from Supabase / SQLite."""
+    init_sources_db()
+    supabase = _get_supabase()
+    if supabase is not None:
+        try:
+            supabase.table("knowledge_sources").delete().eq("id", source_id).execute()
+        except Exception:
+            pass
+
+    try:
+        conn = _get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM knowledge_sources WHERE id = ?", (source_id,))
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+

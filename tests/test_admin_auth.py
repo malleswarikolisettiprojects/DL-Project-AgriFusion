@@ -192,6 +192,60 @@ def test_admin_response_does_not_contain_secrets(mock_verify):
     assert "service_role" not in content
 
 
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_sources_requires_admin(mock_verify):
+    # Normal user (role='user') must get 403
+    token = generate_test_jwt(user_id="usr-non-admin", role="user")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/sources", headers=headers)
+    assert res.status_code == 403
+
+    # Missing token must get 401
+    res_no_token = client.get("/api/v1/admin/sources")
+    assert res_no_token.status_code == 401
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_sources_success(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/sources", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "items" in data
+    assert "page" in data
+    assert "page_size" in data
+    assert "total" in data
+    assert "privacy_note" in data
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_schemes_requires_admin(mock_verify):
+    # Normal user (role='user') must get 403
+    token = generate_test_jwt(user_id="usr-non-admin", role="user")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/schemes", headers=headers)
+    assert res.status_code == 403
+
+    # Missing token must get 401
+    res_no_token = client.get("/api/v1/admin/schemes")
+    assert res_no_token.status_code == 401
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_get_schemes_success(mock_verify):
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/schemes", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "items" in data
+    assert "page" in data
+    assert "page_size" in data
+    assert "total" in data
+    assert "privacy_note" in data
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Running AgriFusion Admin Auth Unit Tests...")
@@ -227,6 +281,19 @@ if __name__ == "__main__":
     test_admin_response_does_not_contain_secrets()
     print(" [PASS] test_admin_response_does_not_contain_secrets")
 
+    test_admin_get_sources_requires_admin()
+    print(" [PASS] test_admin_get_sources_requires_admin")
+
+    test_admin_get_sources_success()
+    print(" [PASS] test_admin_get_sources_success")
+
+    test_admin_get_schemes_requires_admin()
+    print(" [PASS] test_admin_get_schemes_requires_admin")
+
+    test_admin_get_schemes_success()
+    print(" [PASS] test_admin_get_schemes_success")
+
     print("=" * 60)
     print("ALL ADMIN AUTH TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
+

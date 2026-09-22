@@ -90,7 +90,7 @@ def recommend_schemes(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             name="YSR Rythu Bharosa / Annadata Sukhibhava (AP State Scheme)",
             category="State Financial Support & Input Subsidy",
             applicable_states="Andhra Pradesh",
-            possible_benefit="Financial assistance of ₹13,500/year to landowning & tenant farmer families in AP (includes PM-KISAN ₹6,000 central share + ₹7,500 AP State share).",
+            possible_benefit="Financial assistance of ₹13,500/year (verify details at official portal) to landowning & tenant farmer families in AP (includes PM-KISAN ₹6,000 central share + ₹7,500 AP State share).",
             description=(
                 "Annual direct benefit transfer to farmer families in Andhra Pradesh to meet "
                 "cost of cultivation, seeds, fertilizers, and farm labor expenses before sowing season."
@@ -183,7 +183,7 @@ def recommend_schemes(data: Dict[str, Any]) -> List[Dict[str, Any]]:
             name="Rythu Bima — Telangana Farmers Group Life Insurance Scheme",
             category="State Social Security & Life Insurance",
             applicable_states="Telangana",
-            possible_benefit="₹5.00 Lakh free life insurance cover for landowning farmers aged 18 to 59 years. 100% premium paid by TS Government.",
+            possible_benefit="₹5.00 Lakh free life insurance cover (verify details at official portal) for landowning farmers aged 18 to 59 years. 100% premium paid by TS Government.",
             description=(
                 "Provides financial relief and social security to family members of deceased farmers in Telangana. "
                 "Claim amount of ₹5 Lakh is credited to the nominee's account within 10 days of claim submission."
@@ -232,7 +232,7 @@ def recommend_schemes(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         name="PM-KISAN Samman Nidhi (Central Income Support)",
         category="Central Direct Cash Transfer",
         applicable_states="All India (Active in AP & Telangana)",
-        possible_benefit="₹6,000 per year paid in 3 equal installments of ₹2,000 directly into bank accounts.",
+        possible_benefit="₹6,000 per year (verify details at official portal) paid in 3 equal installments of ₹2,000 directly into bank accounts.",
         description=(
             "Central government scheme providing supplemental income support to landholding farmer families "
             "across AP and Telangana to procure farm inputs."
@@ -301,7 +301,7 @@ def recommend_schemes(data: Dict[str, Any]) -> List[Dict[str, Any]]:
         name="Kisan Credit Card (KCC — Low-Interest Crop Credit)",
         category="Concessional Agriculture Credit",
         applicable_states="All Banks in AP & Telangana",
-        possible_benefit="Short-term crop production loan at 4% effective interest rate (with 3% prompt repayment incentive). Loan up to ₹3 Lakhs without collateral.",
+        possible_benefit="Short-term crop production loan at 4% effective interest rate (with 3% prompt repayment incentive). Loan up to ₹3 Lakhs without collateral (verify details at bank portal).",
         description=(
             "Provides timely revolving credit to farmers in AP & TS for purchasing seeds, fertilizers, "
             "pesticides, paying labor, and meeting post-harvest expenses."
