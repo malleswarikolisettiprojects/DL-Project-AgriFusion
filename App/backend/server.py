@@ -285,7 +285,7 @@ def ready():
 
 # 1. Crop Recommendation API
 @app.post("/api/v1/predict/crop")
-def api_predict_crop(
+async def api_predict_crop(
     req: CropRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
@@ -295,7 +295,10 @@ def api_predict_crop(
     try:
         user_email = current_user.email if current_user else None
         payload = {"state": req.state, "district": req.district, "village": req.village, "start_date": req.sowing_date}
-        result = predict_crop(payload)
+        result = await asyncio.wait_for(
+            run_in_threadpool(predict_crop, payload),
+            timeout=25.0,
+        )
         try:
             save_crop_prediction({**result, "user_email": user_email})
         except Exception as db_err:
@@ -306,6 +309,9 @@ def api_predict_crop(
     except ValueError as ve:
         logger.warning("[%s] Crop input validation warning: %s", req_id, ve)
         return make_error_response(422, "crop", "INVALID_INPUT", str(ve), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Crop prediction TIMEOUT (>25s)", req_id)
+        return make_error_response(504, "crop", "CROP_SERVICE_TIMEOUT", "Crop recommendation request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Crop prediction failed: %s", req_id, err)
         return make_error_response(502, "crop", "MODEL_INFERENCE_FAILED", f"Crop recommendation failed: {str(err)}", retryable=True)
@@ -313,7 +319,7 @@ def api_predict_crop(
 
 # 2. Climate Risk API
 @app.post("/api/v1/predict/climate")
-def api_predict_climate(
+async def api_predict_climate(
     req: ClimateRiskRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
@@ -327,7 +333,10 @@ def api_predict_climate(
             "crop": req.crop,
             "start_date": req.sowing_date,
         }
-        result = predict_climate_risk(payload)
+        result = await asyncio.wait_for(
+            run_in_threadpool(predict_climate_risk, payload),
+            timeout=25.0,
+        )
         result.pop("daily_data", None)
         result.pop("hourly_data", None)
         duration_ms = round((time.time() - t0) * 1000, 2)
@@ -336,6 +345,9 @@ def api_predict_climate(
     except ValueError as ve:
         logger.warning("[%s] Climate risk input validation warning: %s", req_id, ve)
         return make_error_response(422, "climate", "INVALID_INPUT", str(ve), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Climate risk prediction TIMEOUT (>25s)", req_id)
+        return make_error_response(504, "climate", "CLIMATE_SERVICE_TIMEOUT", "Climate risk prediction request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Climate risk prediction failed: %s", req_id, err)
         return make_error_response(502, "climate", "CLIMATE_RISK_FAILED", f"Climate risk prediction failed: {str(err)}", retryable=True)
@@ -343,7 +355,7 @@ def api_predict_climate(
 
 # 3. Irrigation & Water Needs API
 @app.post("/api/v1/predict/irrigation")
-def api_predict_irrigation(
+async def api_predict_irrigation(
     req: IrrigationRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
@@ -360,7 +372,10 @@ def api_predict_irrigation(
             "start_date": req.start_date,
             "pump_hp": req.pump_hp,
         }
-        result = predict_irrigation(payload)
+        result = await asyncio.wait_for(
+            run_in_threadpool(predict_irrigation, payload),
+            timeout=25.0,
+        )
         try:
             save_irrigation_prediction({**result, "user_email": user_email})
         except Exception as db_err:
@@ -371,6 +386,9 @@ def api_predict_irrigation(
     except ValueError as ve:
         logger.warning("[%s] Irrigation input validation warning: %s", req_id, ve)
         return make_error_response(422, "irrigation", "INVALID_INPUT", str(ve), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Irrigation calculation TIMEOUT (>25s)", req_id)
+        return make_error_response(504, "irrigation", "IRRIGATION_SERVICE_TIMEOUT", "Irrigation calculation timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Irrigation calculation failed: %s", req_id, err)
         return make_error_response(502, "irrigation", "IRRIGATION_CALCULATION_FAILED", f"Irrigation calculation failed: {str(err)}", retryable=True)
@@ -378,7 +396,7 @@ def api_predict_irrigation(
 
 # 4. Harvest Yield API
 @app.post("/api/v1/predict/yield")
-def api_predict_yield(
+async def api_predict_yield(
     req: YieldRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
@@ -395,7 +413,10 @@ def api_predict_yield(
             "area": req.area_ha,
             "year": req.year,
         }
-        result = predict_yield(payload)
+        result = await asyncio.wait_for(
+            run_in_threadpool(predict_yield, payload),
+            timeout=25.0,
+        )
         try:
             save_yield_prediction({**result, "user_email": user_email})
         except Exception as db_err:
@@ -406,6 +427,9 @@ def api_predict_yield(
     except ValueError as ve:
         logger.warning("[%s] Yield input validation warning: %s", req_id, ve)
         return make_error_response(422, "yield", "INVALID_INPUT", str(ve), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Yield prediction TIMEOUT (>25s)", req_id)
+        return make_error_response(504, "yield", "YIELD_SERVICE_TIMEOUT", "Yield estimation timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Yield prediction failed: %s", req_id, err)
         return make_error_response(502, "yield", "YIELD_PREDICTION_FAILED", f"Yield estimation failed: {str(err)}", retryable=True)
@@ -548,8 +572,12 @@ async def api_predict_disease(
         user_email = current_user.email if current_user else None
         raw = await image.read()
         content_type = (image.content_type or "image/jpeg").lower()
-        result = predict_disease_and_pests(
-            crop=crop, raw=raw, filename=image.filename or "image.jpg", content_type=content_type
+        result = await asyncio.wait_for(
+            run_in_threadpool(
+                predict_disease_and_pests,
+                crop=crop, raw=raw, filename=image.filename or "image.jpg", content_type=content_type
+            ),
+            timeout=30.0,
         )
         top_detections = result.get("top_detections", [])
         secondary = result.get("secondary_detections", [])
@@ -582,6 +610,9 @@ async def api_predict_disease(
     except ValueError as val_err:
         logger.warning("[%s] Disease upload validation warning: %s", req_id, val_err)
         return make_error_response(400, "disease", "INVALID_FILE_UPLOAD", str(val_err), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Disease inference TIMEOUT (>30s)", req_id)
+        return make_error_response(504, "disease", "DISEASE_SERVICE_TIMEOUT", "Disease diagnosis request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Disease inference failed: %s", req_id, err)
         return make_error_response(502, "disease", "DISEASE_INFERENCE_FAILED", f"Disease inference failed: {str(err)}", retryable=True)
@@ -589,7 +620,7 @@ async def api_predict_disease(
 
 # 6b. Universal Agriculture & Scheme Agent Query API
 @app.post("/api/v1/agent/query")
-def api_agent_query(req: AgentQueryRequest):
+async def api_agent_query(req: AgentQueryRequest):
     """
     Universal Farmer Advisor & RAG Query Endpoint.
     Answers any question about agriculture, crop management, organic farming,
@@ -600,7 +631,10 @@ def api_agent_query(req: AgentQueryRequest):
     t0 = time.time()
     logger.info("[%s] POST /api/v1/agent/query started - query='%s' crop=%s", req_id, req.query[:50], req.crop)
     try:
-        res = query_agronomy_agent(req.query, crop=req.crop)
+        res = await asyncio.wait_for(
+            run_in_threadpool(query_agronomy_agent, req.query, crop=req.crop),
+            timeout=30.0,
+        )
         try:
             log_advisory_activity(
                 query_text=req.query,
@@ -617,9 +651,12 @@ def api_agent_query(req: AgentQueryRequest):
     except ValueError as ve:
         logger.warning("[%s] Agent query input validation warning: %s", req_id, ve)
         return make_error_response(422, "agent", "INVALID_INPUT", str(ve), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Agent query TIMEOUT (>30s)", req_id)
+        return make_error_response(504, "agent", "RAG_SERVICE_TIMEOUT", "Agronomy AI agent request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Agent query failed: %s", req_id, err)
-        return make_error_response(504, "agent", "RAG_SERVICE_TIMEOUT", f"Agronomy AI agent service failed: {str(err)}", retryable=True)
+        return make_error_response(504, "agent", "RAG_SERVICE_FAILED", f"Agronomy AI agent service failed: {str(err)}", retryable=True)
 
 
 # 6c. Farmer Advisory Feedback Submission API

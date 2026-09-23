@@ -39,8 +39,18 @@ def test_suite():
     print(f"    Body: {r_ready.json()}")
     assert r_ready.status_code == 200
 
-    # 3. Test OPTIONS Preflight CORS for Stage 5, 6, and Agent
-    for path in ["/api/v1/predict/market", "/api/v1/schemes/recommend", "/api/v1/agent/query"]:
+    # 3. Test OPTIONS Preflight CORS for ALL 8 Prediction/Agent Routes
+    all_routes = [
+        "/api/v1/predict/crop",
+        "/api/v1/predict/climate",
+        "/api/v1/predict/irrigation",
+        "/api/v1/predict/yield",
+        "/api/v1/predict/market",
+        "/api/v1/predict/disease",
+        "/api/v1/schemes/recommend",
+        "/api/v1/agent/query",
+    ]
+    for path in all_routes:
         r_opt = client.options(
             path,
             headers={
@@ -60,24 +70,28 @@ def test_suite():
     r_crop = client.post("/api/v1/predict/crop", json=crop_payload)
     print(f"\n[4] POST /api/v1/predict/crop -> Status: {r_crop.status_code}")
     print(f"    Success: {r_crop.json().get('success')}")
+    assert r_crop.status_code == 200
 
     # 5. Test Climate Risk
     climate_payload = {"state": "Andhra Pradesh", "district": "Visakhapatnam", "crop": "Rice", "sowing_date": "2026-06-15"}
     r_clim = client.post("/api/v1/predict/climate", json=climate_payload)
     print(f"\n[5] POST /api/v1/predict/climate -> Status: {r_clim.status_code}")
     print(f"    Success: {r_clim.json().get('success')}")
+    assert r_clim.status_code == 200
 
     # 6. Test Irrigation
     irrig_payload = {"state": "Andhra Pradesh", "district": "Visakhapatnam", "crop": "Rice", "area_ha": 2.0, "start_date": "2026-06-15", "pump_hp": 5.0}
     r_irrig = client.post("/api/v1/predict/irrigation", json=irrig_payload)
     print(f"\n[6] POST /api/v1/predict/irrigation -> Status: {r_irrig.status_code}")
     print(f"    Success: {r_irrig.json().get('success')}")
+    assert r_irrig.status_code == 200
 
     # 7. Test Yield
     yield_payload = {"state": "Andhra Pradesh", "district": "Visakhapatnam", "crop": "Rice", "season": "Kharif", "area_ha": 2.0, "year": 2026}
     r_yield = client.post("/api/v1/predict/yield", json=yield_payload)
     print(f"\n[7] POST /api/v1/predict/yield -> Status: {r_yield.status_code}")
     print(f"    Success: {r_yield.json().get('success')}")
+    assert r_yield.status_code == 200
 
     # 8. Test Market Price (Stage 5 Independent Execution)
     mkt_payload = {
@@ -102,6 +116,17 @@ def test_suite():
     print(f"     Cached: {r_mkt_cached.json().get('cached')}")
     assert r_mkt_cached.status_code == 200
     assert r_mkt_cached.json().get("cached") is True
+
+    # 8c. Test Disease Diagnosis (Multipart Upload)
+    dummy_image = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00`\x00`\x00\x00\xff\xdb\x00C\x00"
+    r_dis = client.post(
+        "/api/v1/predict/disease",
+        data={"crop": "Rice"},
+        files={"image": ("test_leaf.jpg", dummy_image, "image/jpeg")},
+    )
+    print(f"\n[8c] POST /api/v1/predict/disease -> Status: {r_dis.status_code}")
+    print(f"     Success: {r_dis.json().get('success')}")
+    assert r_dis.status_code in [200, 400, 502]
 
     # 9. Test Schemes Matcher (Stage 6 Independent Execution)
     schemes_payload = {
@@ -173,3 +198,4 @@ def test_suite():
 
 if __name__ == "__main__":
     test_suite()
+
