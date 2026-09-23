@@ -96,6 +96,13 @@ def test_suite():
     print(f"    Body: {r_mkt.json()}")
     assert r_mkt.status_code == 200
 
+    # 8b. Test Market Price Cache Hit
+    r_mkt_cached = client.post("/api/v1/predict/market", json=mkt_payload)
+    print(f"\n[8b] POST /api/v1/predict/market (Cache Hit Test) -> Status: {r_mkt_cached.status_code}")
+    print(f"     Cached: {r_mkt_cached.json().get('cached')}")
+    assert r_mkt_cached.status_code == 200
+    assert r_mkt_cached.json().get("cached") is True
+
     # 9. Test Schemes Matcher (Stage 6 Independent Execution)
     schemes_payload = {
         "state": "Andhra Pradesh",

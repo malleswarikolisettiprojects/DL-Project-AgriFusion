@@ -70,29 +70,23 @@ from App.backend.auth.dependencies import (
     require_admin,
 )
 
+from starlette.concurrency import run_in_threadpool
+import asyncio
+
+from App.backend.market_cache import (
+    get_cache_lock,
+    get_cached_market_price,
+    make_market_cache_key,
+    set_cached_market_price,
+)
+
 app = FastAPI(
     title="AgriFusion Unified Backend REST API",
     description="AI Precision Decision Support System for Agriculture — Andhra Pradesh & Telangana",
     version="2.0.0",
 )
 
-@app.on_event("startup")
-def startup_db_init():
-    """Ensure all registry database tables (sources, schemes, advisories, feedback) are initialized and seeded on app boot."""
-    try:
-        init_sources_db()
-        init_schemes_db()
-        init_advisories_db()
-        init_feedback_db()
-        load_local_agronomy_documents()
-        logger.info("AgriFusion database registries and RAG documents initialized successfully.")
-    except Exception as err:
-        logger.warning(f"Error during startup DB initialization: {err}")
-
-app.include_router(auth_router)
-app.include_router(admin_router)
-
-# ── CORS ──────────────────────────────────────────────────────────────────────
+# ── CORS (Must be added immediately after FastAPI app creation) ─────────────
 cors_origins = [
     "https://agrifusion.ai.studio",
     "http://localhost:5173",
@@ -111,6 +105,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.on_event("startup")
+def startup_db_init():
+    """Ensure all registry database tables (sources, schemes, advisories, feedback) are initialized and seeded on app boot."""
+    try:
+        init_sources_db()
+        init_schemes_db()
+        init_advisories_db()
+        init_feedback_db()
+        load_local_agronomy_documents()
+        logger.info("AgriFusion database registries and RAG documents initialized successfully.")
+    except Exception as err:
+        logger.warning(f"Error during startup DB initialization: {err}")
+
+app.include_router(auth_router)
+app.include_router(admin_router)
 
 
 def make_error_response(
@@ -177,6 +187,7 @@ class MarketRequest(BaseModel):
     end_date: str = Field(..., example="2026-10-15")
     year: int = Field(2026, example=2026)
     market_date: str = Field(..., example="2026-10-20")
+    village: Optional[str] = Field(None, example="Anakapalle")
 
 
 class SchemesRequest(BaseModel):
@@ -400,53 +411,125 @@ def api_predict_yield(
         return make_error_response(502, "yield", "YIELD_PREDICTION_FAILED", f"Yield estimation failed: {str(err)}", retryable=True)
 
 
-# 5. Market Price API (Stage 5 Isolation & Independent Payload Handling)
+# 5. Market Price API (Stage 5 Isolation, Caching & Non-blocking Threadpool)
 @app.post("/api/v1/predict/market")
-def api_predict_market(
+async def api_predict_market(
     req: MarketRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
-    logger.info("[%s] POST /api/v1/predict/market started - commodity=%s state=%s district=%s", req_id, req.commodity, req.state, req.district)
+    logger.info("[%s] POST /api/v1/predict/market started - commodity=%s state=%s district=%s date=%s", req_id, req.commodity, req.state, req.district, req.market_date)
+
+    cache_key = make_market_cache_key(
+        state=req.state,
+        district=req.district,
+        commodity=req.commodity,
+        market_date=req.market_date,
+        area=req.area_ha,
+        season=req.season,
+        year=req.year,
+    )
+
+    # 1. Check in-memory cache first
+    cached_result, is_stale = get_cached_market_price(cache_key)
+    if cached_result and not is_stale:
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Market price cache HIT in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "market", "result": cached_result, "cached": True}
+
+    # 2. Acquire lock and execute prediction non-blocking
     try:
         user_email = current_user.email if current_user else None
-        result = predict_market_price(
-            state=req.state,
-            district=req.district,
-            commodity=req.commodity,
-            area=req.area_ha,
-            season=req.season,
-            start_date=req.start_date,
-            end_date=req.end_date,
-            year=req.year,
-            market_date=req.market_date,
-        )
-        if not result or "predicted_price" not in result:
-            return make_error_response(
-                status_code=502,
-                stage="market",
-                error_code="PRICE_DATA_UNAVAILABLE",
-                message="Mandi price data is temporarily unavailable for the selected commodity.",
-                retryable=True,
+
+        async with get_cache_lock():
+            # Re-check cache after acquiring lock
+            cached_result, is_stale = get_cached_market_price(cache_key)
+            if cached_result and not is_stale:
+                return {"success": True, "stage": "market", "result": cached_result, "cached": True}
+
+            result = await asyncio.wait_for(
+                run_in_threadpool(
+                    predict_market_price,
+                    state=req.state,
+                    district=req.district,
+                    commodity=req.commodity,
+                    area=req.area_ha,
+                    season=req.season,
+                    start_date=req.start_date,
+                    end_date=req.end_date,
+                    year=req.year,
+                    village=req.village,
+                    market_date=req.market_date,
+                ),
+                timeout=28.0,
             )
-        try:
-            save_market_prediction({**result, "user_email": user_email})
-        except Exception as db_err:
-            logger.warning("[%s] Supabase market log non-blocking warning: %s", req_id, db_err)
-        duration_ms = round((time.time() - t0) * 1000, 2)
-        logger.info("[%s] Market price prediction success in %sms", req_id, duration_ms)
-        return {"success": True, "stage": "market", "result": result}
+
+            if not result or "predicted_price" not in result:
+                if cached_result:
+                    logger.warning("[%s] Fresh market lookup returned empty result, using stale cache fallback", req_id)
+                    return {
+                        "success": True,
+                        "stage": "market",
+                        "result": cached_result,
+                        "stale": True,
+                        "message": "Mandi price data served from cache (upstream market source temporarily unavailable)."
+                    }
+                return make_error_response(
+                    status_code=502,
+                    stage="market",
+                    error_code="MARKET_DATA_UNAVAILABLE",
+                    message="Mandi price data is temporarily unavailable. Please retry shortly.",
+                    retryable=True,
+                )
+
+            set_cached_market_price(cache_key, result)
+            try:
+                save_market_prediction({**result, "user_email": user_email})
+            except Exception as db_err:
+                logger.warning("[%s] Supabase market log non-blocking warning: %s", req_id, db_err)
+
+            duration_ms = round((time.time() - t0) * 1000, 2)
+            logger.info("[%s] Market price prediction success in %sms", req_id, duration_ms)
+            return {"success": True, "stage": "market", "result": result}
+
     except ValueError as ve:
         logger.warning("[%s] Market request input validation warning: %s", req_id, ve)
         return make_error_response(422, "market", "INVALID_INPUT", str(ve), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Market price prediction TIMEOUT (>20s)", req_id)
+        if cached_result:
+            logger.warning("[%s] Returning stale cached result after timeout", req_id)
+            return {
+                "success": True,
+                "stage": "market",
+                "result": cached_result,
+                "stale": True,
+                "message": "Mandi price data served from cache (upstream timeout)."
+            }
+        return make_error_response(
+            status_code=504,
+            stage="market",
+            error_code="MARKET_DATA_UNAVAILABLE",
+            message="Mandi price data is temporarily unavailable. Please retry shortly.",
+            retryable=True,
+        )
     except Exception as err:
         logger.exception("[%s] Market price prediction failed: %s", req_id, err)
+        if cached_result:
+            logger.warning("[%s] Returning stale cached result after exception", req_id)
+            return {
+                "success": True,
+                "stage": "market",
+                "result": cached_result,
+                "stale": True,
+                "message": "Mandi price data served from cache (upstream error)."
+            }
         return make_error_response(
             status_code=502,
             stage="market",
-            error_code="PRICE_DATA_UNAVAILABLE",
-            message="Mandi price data is temporarily unavailable for the selected commodity.",
+            error_code="MARKET_DATA_UNAVAILABLE",
+            message="Mandi price data is temporarily unavailable. Please retry shortly.",
             retryable=True,
         )
 
@@ -592,24 +675,27 @@ def api_get_rag_documents():
         return make_error_response(500, "rag_documents", "DOCUMENTS_LISTING_FAILED", str(err), retryable=True)
 
 
-# 7. Government Schemes Matcher API (Stage 6 Isolation & Independent Payload Handling)
+# 7. Government Schemes Matcher API (Stage 6 Non-Blocking Threadpool & Isolation)
 @app.post("/api/v1/schemes/recommend")
-def api_recommend_schemes(req: SchemesRequest):
+async def api_recommend_schemes(req: SchemesRequest):
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     logger.info("[%s] POST /api/v1/schemes/recommend started - state=%s crop=%s", req_id, req.state, req.crop)
     try:
-        recommendations = recommend_schemes(req.dict())
+        recommendations = await asyncio.wait_for(
+            run_in_threadpool(recommend_schemes, req.dict()),
+            timeout=15.0,
+        )
         duration_ms = round((time.time() - t0) * 1000, 2)
         logger.info("[%s] Schemes recommendation finished in %sms - matches=%d", req_id, duration_ms, len(recommendations))
         if not recommendations:
             return {
                 "success": True,
                 "stage": "schemes",
-                "count": 0,
                 "matches": [],
                 "schemes": [],
-                "message": "No matching government subsidy was found for the supplied location and crop."
+                "message": "No matching government subsidy was found for the supplied inputs.",
+                "retryable": False
             }
         return {
             "success": True,
@@ -622,6 +708,9 @@ def api_recommend_schemes(req: SchemesRequest):
     except ValueError as ve:
         logger.warning("[%s] Schemes request input validation warning: %s", req_id, ve)
         return make_error_response(422, "schemes", "INVALID_INPUT", str(ve), retryable=False)
+    except asyncio.TimeoutError:
+        logger.error("[%s] Schemes recommendation TIMEOUT (>15s)", req_id)
+        return make_error_response(504, "schemes", "SCHEMES_SERVICE_TIMEOUT", "Government schemes recommendation timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Schemes recommendation failed: %s", req_id, err)
         return make_error_response(502, "schemes", "SCHEMES_SERVICE_FAILED", f"Government schemes recommendation failed: {str(err)}", retryable=True)

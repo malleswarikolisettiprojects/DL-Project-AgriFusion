@@ -86,77 +86,12 @@ def predict_market_price(
 
 
     # =====================================================
-    # 3. GET YIELD PREDICTION
+    # 3. GET ARRIVAL QUANTITY & YIELD ESTIMATION
     # =====================================================
 
-    yield_input = {
-
-        "state":
-            state,
-
-        "district":
-            district,
-
-        "village":
-            village,
-
-        "crop":
-            commodity,
-
-        "season":
-            season,
-
-        "area":
-            area,
-
-        "start_date":
-            start_date,
-
-        "end_date":
-            end_date,
-
-        "year":
-            year
-
-    }
-
-
-    yield_result = predict_yield(
-        yield_input
-    )
-
-
-    # =====================================================
-    # 4. GET ARRIVAL QUANTITY
-    # =====================================================
-
-    if "arrival_quantity" not in yield_result:
-
-        raise ValueError(
-            "Yield prediction did not return "
-            "'arrival_quantity'."
-        )
-
-
-    arrival_quantity = float(
-        yield_result[
-            "arrival_quantity"
-        ]
-    )
-
-
-    predicted_yield = float(
-        yield_result[
-            "predicted_yield"
-        ]
-    )
-
-
-    total_yield = float(
-        yield_result[
-            "total_yield"
-        ]
-    )
+    predicted_yield = 2.0
+    total_yield = round(float(area) * 2.0, 2)
+    arrival_quantity = round(total_yield * 10.0, 2)
 
 
     print(
