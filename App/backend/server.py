@@ -114,8 +114,7 @@ def startup_db_init():
         init_schemes_db()
         init_advisories_db()
         init_feedback_db()
-        load_local_agronomy_documents()
-        logger.info("AgriFusion database registries and RAG documents initialized successfully.")
+        logger.info("AgriFusion database registries initialized successfully.")
     except Exception as err:
         logger.warning(f"Error during startup DB initialization: {err}")
 
