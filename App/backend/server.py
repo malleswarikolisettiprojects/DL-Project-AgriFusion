@@ -632,7 +632,7 @@ async def api_agent_query(req: AgentQueryRequest):
     try:
         res = await asyncio.wait_for(
             run_in_threadpool(query_agronomy_agent, req.query, crop=req.crop),
-            timeout=30.0,
+            timeout=45.0,
         )
         try:
             log_advisory_activity(
@@ -651,7 +651,7 @@ async def api_agent_query(req: AgentQueryRequest):
         logger.warning("[%s] Agent query input validation warning: %s", req_id, ve)
         return make_error_response(422, "agent", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
-        logger.error("[%s] Agent query TIMEOUT (>30s)", req_id)
+        logger.error("[%s] Agent query TIMEOUT (>45s)", req_id)
         return make_error_response(504, "agent", "RAG_SERVICE_TIMEOUT", "Agronomy AI agent request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Agent query failed: %s", req_id, err)
