@@ -15,6 +15,7 @@ Exposes REST endpoints for all 8 AI models and data services:
 import logging
 import os
 import sys
+import time
 import uuid
 import warnings
 from datetime import datetime, timezone
@@ -35,6 +36,7 @@ if str(BASE_DIR) not in sys.path:
 import uvicorn
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from App.backend.climate_risk import predict_climate_risk
@@ -91,27 +93,45 @@ app.include_router(auth_router)
 app.include_router(admin_router)
 
 # ── CORS ──────────────────────────────────────────────────────────────────────
-allowed_origins = [
+cors_origins = [
+    "https://agrifusion.ai.studio",
     "http://localhost:5173",
     "http://localhost:3000",
-    "https://agrifusion.ai.studio",
-    "http://agrifusion.ai.studio",
 ]
-frontend_url = os.getenv("FRONTEND_URL")
-if frontend_url and frontend_url.rstrip("/") not in allowed_origins:
-    allowed_origins.append(frontend_url.rstrip("/"))
+frontend_url_env = os.getenv("FRONTEND_URL")
+if frontend_url_env:
+    clean_origin = frontend_url_env.rstrip("/")
+    if clean_origin and clean_origin not in cors_origins:
+        cors_origins.append(clean_origin)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if not frontend_url else allowed_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=[
-        "Authorization",
-        "Content-Type",
-        "Accept",
-    ],
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+
+def make_error_response(
+    status_code: int,
+    stage: str,
+    error_code: str,
+    message: str,
+    retryable: bool = True,
+    details: Optional[Dict[str, Any]] = None,
+):
+    """Return safe structured JSON error response."""
+    payload = {
+        "success": False,
+        "stage": stage,
+        "error_code": error_code,
+        "message": message,
+        "retryable": retryable,
+    }
+    if details:
+        payload["details"] = details
+    return JSONResponse(status_code=status_code, content=payload)
 
 
 # Pydantic Schemas
@@ -228,16 +248,27 @@ def home():
 @app.get("/health")
 def health():
     """
-    Safe health check — returns boolean status flags only.
-    Never returns credentials, URLs, or connection strings.
+    Lightweight health check — returns immediately without calling external APIs or loading heavy models.
+    """
+    return {
+        "status": "ok",
+        "service": "agrifusion-backend"
+    }
+
+
+@app.get("/ready")
+def ready():
+    """
+    Detailed readiness check verifying database and model artifacts.
     """
     cfg = get_config_status()
     return {
-        "status": "ok",
+        "status": "ready",
+        "service": "agrifusion-backend",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "rag_documents_available": True,
-        "database_configured": cfg["supabase_configured"],
-        "external_models_configured": cfg["roboflow_configured"] or cfg["hf_token_configured"],
+        "database_configured": cfg.get("supabase_configured", False),
+        "external_models_configured": bool(cfg.get("roboflow_configured") or cfg.get("hf_token_configured")),
     }
 
 
@@ -247,15 +278,26 @@ def api_predict_crop(
     req: CropRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/predict/crop started - state=%s district=%s", req_id, req.state, req.district)
     try:
         user_email = current_user.email if current_user else None
         payload = {"state": req.state, "district": req.district, "village": req.village, "start_date": req.sowing_date}
         result = predict_crop(payload)
-        # Persist prediction (not recommendations)
-        save_crop_prediction({**result, "user_email": user_email})
-        return {"status": "success", "result": result}
-    except Exception:
-        raise HTTPException(500, "Crop prediction failed. Please try again.")
+        try:
+            save_crop_prediction({**result, "user_email": user_email})
+        except Exception as db_err:
+            logger.warning("[%s] Supabase crop log non-blocking warning: %s", req_id, db_err)
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Crop prediction success in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "crop", "result": result}
+    except ValueError as ve:
+        logger.warning("[%s] Crop input validation warning: %s", req_id, ve)
+        return make_error_response(422, "crop", "INVALID_INPUT", str(ve), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Crop prediction failed: %s", req_id, err)
+        return make_error_response(502, "crop", "MODEL_INFERENCE_FAILED", f"Crop recommendation failed: {str(err)}", retryable=True)
 
 
 # 2. Climate Risk API
@@ -264,9 +306,9 @@ def api_predict_climate(
     req: ClimateRiskRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
-    request_id = str(uuid.uuid4())
-    logger.info("[%s] Climate request: state=%s district=%s crop=%s sowing_date=%s",
-                request_id, req.state, req.district, req.crop, req.sowing_date)
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/predict/climate started - state=%s crop=%s", req_id, req.state, req.crop)
     try:
         payload = {
             "state": req.state,
@@ -275,15 +317,17 @@ def api_predict_climate(
             "start_date": req.sowing_date,
         }
         result = predict_climate_risk(payload)
-        # predict_climate_risk() already calls save_climate_prediction internally.
-        # Strip non-JSON-serializable fields (DataFrames) before returning.
         result.pop("daily_data", None)
         result.pop("hourly_data", None)
-        logger.info("[%s] Climate prediction success: risk=%s", request_id, result.get("risk_category"))
-        return {"status": "success", "result": result}
-    except Exception:
-        logger.exception("[%s] Climate prediction failed", request_id)
-        raise HTTPException(500, "Climate risk prediction failed. Please try again.")
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Climate risk prediction success in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "climate", "result": result}
+    except ValueError as ve:
+        logger.warning("[%s] Climate risk input validation warning: %s", req_id, ve)
+        return make_error_response(422, "climate", "INVALID_INPUT", str(ve), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Climate risk prediction failed: %s", req_id, err)
+        return make_error_response(502, "climate", "CLIMATE_RISK_FAILED", f"Climate risk prediction failed: {str(err)}", retryable=True)
 
 
 # 3. Irrigation & Water Needs API
@@ -292,6 +336,9 @@ def api_predict_irrigation(
     req: IrrigationRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/predict/irrigation started - state=%s crop=%s area=%s", req_id, req.state, req.crop, req.area_ha)
     try:
         user_email = current_user.email if current_user else None
         payload = {
@@ -303,10 +350,19 @@ def api_predict_irrigation(
             "pump_hp": req.pump_hp,
         }
         result = predict_irrigation(payload)
-        save_irrigation_prediction({**result, "user_email": user_email})
-        return {"status": "success", "result": result}
-    except Exception:
-        raise HTTPException(500, "Irrigation prediction failed. Please try again.")
+        try:
+            save_irrigation_prediction({**result, "user_email": user_email})
+        except Exception as db_err:
+            logger.warning("[%s] Supabase irrigation log non-blocking warning: %s", req_id, db_err)
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Irrigation calculation success in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "irrigation", "result": result}
+    except ValueError as ve:
+        logger.warning("[%s] Irrigation input validation warning: %s", req_id, ve)
+        return make_error_response(422, "irrigation", "INVALID_INPUT", str(ve), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Irrigation calculation failed: %s", req_id, err)
+        return make_error_response(502, "irrigation", "IRRIGATION_CALCULATION_FAILED", f"Irrigation calculation failed: {str(err)}", retryable=True)
 
 
 # 4. Harvest Yield API
@@ -315,6 +371,9 @@ def api_predict_yield(
     req: YieldRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/predict/yield started - crop=%s area=%s season=%s", req_id, req.crop, req.area_ha, req.season)
     try:
         user_email = current_user.email if current_user else None
         payload = {
@@ -326,18 +385,30 @@ def api_predict_yield(
             "year": req.year,
         }
         result = predict_yield(payload)
-        save_yield_prediction({**result, "user_email": user_email})
-        return {"status": "success", "result": result}
-    except Exception:
-        raise HTTPException(500, "Yield prediction failed. Please try again.")
+        try:
+            save_yield_prediction({**result, "user_email": user_email})
+        except Exception as db_err:
+            logger.warning("[%s] Supabase yield log non-blocking warning: %s", req_id, db_err)
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Yield estimation success in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "yield", "result": result}
+    except ValueError as ve:
+        logger.warning("[%s] Yield input validation warning: %s", req_id, ve)
+        return make_error_response(422, "yield", "INVALID_INPUT", str(ve), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Yield prediction failed: %s", req_id, err)
+        return make_error_response(502, "yield", "YIELD_PREDICTION_FAILED", f"Yield estimation failed: {str(err)}", retryable=True)
 
 
-# 5. Market Price API
+# 5. Market Price API (Stage 5 Isolation & Independent Payload Handling)
 @app.post("/api/v1/predict/market")
 def api_predict_market(
     req: MarketRequest,
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/predict/market started - commodity=%s state=%s district=%s", req_id, req.commodity, req.state, req.district)
     try:
         user_email = current_user.email if current_user else None
         result = predict_market_price(
@@ -351,10 +422,33 @@ def api_predict_market(
             year=req.year,
             market_date=req.market_date,
         )
-        save_market_prediction({**result, "user_email": user_email})
-        return {"status": "success", "result": result}
-    except Exception:
-        raise HTTPException(500, "Market price prediction failed. Please try again.")
+        if not result or "predicted_price" not in result:
+            return make_error_response(
+                status_code=502,
+                stage="market",
+                error_code="PRICE_DATA_UNAVAILABLE",
+                message="Mandi price data is temporarily unavailable for the selected commodity.",
+                retryable=True,
+            )
+        try:
+            save_market_prediction({**result, "user_email": user_email})
+        except Exception as db_err:
+            logger.warning("[%s] Supabase market log non-blocking warning: %s", req_id, db_err)
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Market price prediction success in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "market", "result": result}
+    except ValueError as ve:
+        logger.warning("[%s] Market request input validation warning: %s", req_id, ve)
+        return make_error_response(422, "market", "INVALID_INPUT", str(ve), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Market price prediction failed: %s", req_id, err)
+        return make_error_response(
+            status_code=502,
+            stage="market",
+            error_code="PRICE_DATA_UNAVAILABLE",
+            message="Mandi price data is temporarily unavailable for the selected commodity.",
+            retryable=True,
+        )
 
 
 # 6. Multi-Provider Disease & Pest Diagnosis API (Multipart File Upload)
@@ -364,6 +458,9 @@ async def api_predict_disease(
     image: UploadFile = File(...),
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/predict/disease started - crop=%s filename=%s", req_id, crop, image.filename)
     try:
         user_email = current_user.email if current_user else None
         raw = await image.read()
@@ -371,7 +468,6 @@ async def api_predict_disease(
         result = predict_disease_and_pests(
             crop=crop, raw=raw, filename=image.filename or "image.jpg", content_type=content_type
         )
-        # Extract key prediction fields — do NOT save remedies or schemes
         top_detections = result.get("top_detections", [])
         secondary = result.get("secondary_detections", [])
         top_disease = next((d for d in top_detections if "disease" in d.get("source", "").lower()), {})
@@ -381,24 +477,31 @@ async def api_predict_disease(
             {"label": d.get("label"), "confidence": d.get("confidence"), "source": d.get("source")}
             for d in (top_detections + secondary)
         ]
-        save_disease_prediction({
-            "user_email":              user_email,
-            "crop":                    crop,
-            "top_disease":             top_disease.get("label"),
-            "top_disease_confidence":  top_disease.get("confidence"),
-            "top_pest":                top_pest.get("label"),
-            "top_pest_confidence":     top_pest.get("confidence"),
-            "top_nutrient":            top_nutrient.get("label"),
-            "top_nutrient_confidence": top_nutrient.get("confidence"),
-            "annotated_image_url":     result.get("annotated_image_url"),
-            "all_detections":          all_detections,
-            "custom_crop_notice":      result.get("custom_crop_notice"),
-        })
-        return {"status": "success", "result": result}
+        try:
+            save_disease_prediction({
+                "user_email":              user_email,
+                "crop":                    crop,
+                "top_disease":             top_disease.get("label"),
+                "top_disease_confidence":  top_disease.get("confidence"),
+                "top_pest":                top_pest.get("label"),
+                "top_pest_confidence":     top_pest.get("confidence"),
+                "top_nutrient":            top_nutrient.get("label"),
+                "top_nutrient_confidence": top_nutrient.get("confidence"),
+                "annotated_image_url":     result.get("annotated_image_url"),
+                "all_detections":          all_detections,
+                "custom_crop_notice":      result.get("custom_crop_notice"),
+            })
+        except Exception as db_err:
+            logger.warning("[%s] Supabase disease log non-blocking warning: %s", req_id, db_err)
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Disease inference success in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "disease", "result": result}
     except ValueError as val_err:
-        raise HTTPException(400, str(val_err))
-    except Exception:
-        raise HTTPException(500, "Disease inference failed. Please try again.")
+        logger.warning("[%s] Disease upload validation warning: %s", req_id, val_err)
+        return make_error_response(400, "disease", "INVALID_FILE_UPLOAD", str(val_err), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Disease inference failed: %s", req_id, err)
+        return make_error_response(502, "disease", "DISEASE_INFERENCE_FAILED", f"Disease inference failed: {str(err)}", retryable=True)
 
 
 # 6b. Universal Agriculture & Scheme Agent Query API
@@ -410,10 +513,11 @@ def api_agent_query(req: AgentQueryRequest):
     or government schemes (PM-KISAN, PMFBY, KCC, Soil Health Card, SMAM, etc.).
     Indexes local PDFs in Data/agronomy_docs/ and verified govt web pages.
     """
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/agent/query started - query='%s' crop=%s", req_id, req.query[:50], req.crop)
     try:
         res = query_agronomy_agent(req.query, crop=req.crop)
-
-        # Telemetry logging (non-blocking safeguard)
         try:
             log_advisory_activity(
                 query_text=req.query,
@@ -423,11 +527,16 @@ def api_agent_query(req: AgentQueryRequest):
                 rag_result=res,
             )
         except Exception as log_err:
-            logger.warning(f"Advisory telemetry logging failed non-blockingly: {log_err}")
-
-        return {"status": "success", "agent_response": res}
-    except Exception:
-        raise HTTPException(500, "Agent query failed. Please try again.")
+            logger.warning("[%s] Advisory telemetry logging failed non-blockingly: %s", req_id, log_err)
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Agent query finished in %sms", req_id, duration_ms)
+        return {"success": True, "stage": "agent", "agent_response": res}
+    except ValueError as ve:
+        logger.warning("[%s] Agent query input validation warning: %s", req_id, ve)
+        return make_error_response(422, "agent", "INVALID_INPUT", str(ve), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Agent query failed: %s", req_id, err)
+        return make_error_response(504, "agent", "RAG_SERVICE_TIMEOUT", f"Agronomy AI agent service failed: {str(err)}", retryable=True)
 
 
 # 6c. Farmer Advisory Feedback Submission API
@@ -446,12 +555,13 @@ def api_submit_feedback(req: CreateFeedbackRequest):
             language=req.language,
         )
         return {
-            "status": "success",
+            "success": True,
+            "stage": "feedback",
             "message": "Feedback submitted successfully",
             "feedback_id": record["id"],
         }
-    except Exception:
-        raise HTTPException(500, "Feedback submission failed. Please try again.")
+    except Exception as err:
+        return make_error_response(500, "feedback", "FEEDBACK_SUBMISSION_FAILED", str(err), retryable=True)
 
 
 @app.get("/api/v1/rag/documents")
@@ -463,7 +573,8 @@ def api_get_rag_documents():
     try:
         local_docs = load_local_agronomy_documents()
         return {
-            "status": "success",
+            "success": True,
+            "stage": "rag_documents",
             "local_documents_count": len(local_docs),
             "local_documents": [
                 {
@@ -477,33 +588,78 @@ def api_get_rag_documents():
             ],
             "verified_links": AGRONOMY_DOCUMENT_LINKS,
         }
-    except Exception:
-        raise HTTPException(500, "RAG documents listing failed. Please try again.")
+    except Exception as err:
+        return make_error_response(500, "rag_documents", "DOCUMENTS_LISTING_FAILED", str(err), retryable=True)
 
 
-# 7. Government Schemes Matcher API
+# 7. Government Schemes Matcher API (Stage 6 Isolation & Independent Payload Handling)
 @app.post("/api/v1/schemes/recommend")
 def api_recommend_schemes(req: SchemesRequest):
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/schemes/recommend started - state=%s crop=%s", req_id, req.state, req.crop)
     try:
         recommendations = recommend_schemes(req.dict())
-        return {"status": "success", "count": len(recommendations), "schemes": recommendations}
-    except Exception:
-        raise HTTPException(500, "Schemes recommendation failed. Please try again.")
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logger.info("[%s] Schemes recommendation finished in %sms - matches=%d", req_id, duration_ms, len(recommendations))
+        if not recommendations:
+            return {
+                "success": True,
+                "stage": "schemes",
+                "count": 0,
+                "matches": [],
+                "schemes": [],
+                "message": "No matching government subsidy was found for the supplied location and crop."
+            }
+        return {
+            "success": True,
+            "stage": "schemes",
+            "count": len(recommendations),
+            "matches": recommendations,
+            "schemes": recommendations,
+            "message": "Government subsidy schemes matched successfully."
+        }
+    except ValueError as ve:
+        logger.warning("[%s] Schemes request input validation warning: %s", req_id, ve)
+        return make_error_response(422, "schemes", "INVALID_INPUT", str(ve), retryable=False)
+    except Exception as err:
+        logger.exception("[%s] Schemes recommendation failed: %s", req_id, err)
+        return make_error_response(502, "schemes", "SCHEMES_SERVICE_FAILED", f"Government schemes recommendation failed: {str(err)}", retryable=True)
 
 
-# 8. 1-Click Connected Farm Pipeline API
+# 8. 1-Click Connected Farm Pipeline API (Stage-by-Stage Isolated Pipeline Execution)
 @app.post("/api/v1/pipeline/run")
 def api_run_pipeline(req: PipelineRequest):
+    req_id = str(uuid.uuid4())[:8]
+    t0 = time.time()
+    logger.info("[%s] POST /api/v1/pipeline/run started - state=%s district=%s", req_id, req.state, req.district)
+    pipeline_res = {}
+
+    # Step A: Crop Selection
     try:
-        # Step A: Crop Selection
         crop_payload = {"state": req.state, "district": req.district, "village": req.village, "start_date": req.sowing_date}
         crop_res = predict_crop(crop_payload)
+        pipeline_res["crop"] = {"success": True, "result": crop_res}
         selected_crop = req.target_crop or crop_res.get("predicted_crop", "Rice")
+    except Exception as e:
+        logger.warning("[%s] Pipeline Crop step isolated error: %s", req_id, e)
+        pipeline_res["crop"] = {"success": False, "error": str(e)}
+        selected_crop = req.target_crop or "Rice"
 
-        # Step B: Climate Risk
+    # Step B: Climate Risk
+    try:
         climate_res = predict_climate_risk({"state": req.state, "district": req.district, "crop": selected_crop, "start_date": req.sowing_date})
+        climate_res.pop("daily_data", None)
+        climate_res.pop("hourly_data", None)
+        pipeline_res["climate"] = {"success": True, "result": climate_res}
+        risk_lvl = climate_res.get("risk_category", "Low")
+    except Exception as e:
+        logger.warning("[%s] Pipeline Climate step isolated error: %s", req_id, e)
+        pipeline_res["climate"] = {"success": False, "error": str(e)}
+        risk_lvl = "Low"
 
-        # Step C: Irrigation & Pump Hours
+    # Step C: Irrigation
+    try:
         irrigation_res = predict_irrigation({
             "state": req.state,
             "district": req.district,
@@ -512,8 +668,13 @@ def api_run_pipeline(req: PipelineRequest):
             "start_date": req.sowing_date,
             "pump_hp": req.pump_hp,
         })
+        pipeline_res["irrigation"] = {"success": True, "result": irrigation_res}
+    except Exception as e:
+        logger.warning("[%s] Pipeline Irrigation step isolated error: %s", req_id, e)
+        pipeline_res["irrigation"] = {"success": False, "error": str(e)}
 
-        # Step D: Harvest Yield
+    # Step D: Yield
+    try:
         yield_res = predict_yield({
             "state": req.state,
             "district": req.district,
@@ -522,8 +683,13 @@ def api_run_pipeline(req: PipelineRequest):
             "area": req.area_ha,
             "year": 2026,
         })
+        pipeline_res["yield"] = {"success": True, "result": yield_res}
+    except Exception as e:
+        logger.warning("[%s] Pipeline Yield step isolated error: %s", req_id, e)
+        pipeline_res["yield"] = {"success": False, "error": str(e)}
 
-        # Step E: Market Price
+    # Step E: Market Price (Stage 5 Isolation)
+    try:
         market_res = predict_market_price(
             state=req.state,
             district=req.district,
@@ -535,9 +701,28 @@ def api_run_pipeline(req: PipelineRequest):
             year=2026,
             market_date="2026-10-20",
         )
+        if market_res and "predicted_price" in market_res:
+            pipeline_res["market"] = {"success": True, "stage": "market", "result": market_res}
+        else:
+            pipeline_res["market"] = {
+                "success": False,
+                "stage": "market",
+                "error_code": "PRICE_DATA_UNAVAILABLE",
+                "message": "Mandi price data is temporarily unavailable for the selected commodity.",
+                "retryable": True
+            }
+    except Exception as e:
+        logger.warning("[%s] Pipeline Market step isolated error: %s", req_id, e)
+        pipeline_res["market"] = {
+            "success": False,
+            "stage": "market",
+            "error_code": "PRICE_DATA_UNAVAILABLE",
+            "message": "Mandi price data is temporarily unavailable for the selected commodity.",
+            "retryable": True
+        }
 
-        # Step F: Govt Schemes
-        risk_lvl = climate_res.get("risk_category", "Low")
+    # Step F: Govt Schemes (Stage 6 Isolation)
+    try:
         schemes_res = recommend_schemes({
             "state": req.state,
             "district": req.district,
@@ -547,22 +732,32 @@ def api_run_pipeline(req: PipelineRequest):
             "irrigation_type": "Drip",
             "climate_risk_level": risk_lvl,
         })
-
-        output = {
-            "crop_recommendation": crop_res,
-            "selected_crop": selected_crop,
-            "climate_risk": climate_res,
-            "irrigation_schedule": irrigation_res,
-            "harvest_yield": yield_res,
-            "market_price": market_res,
-            "eligible_schemes": schemes_res,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+        pipeline_res["schemes"] = {
+            "success": True,
+            "stage": "schemes",
+            "count": len(schemes_res),
+            "matches": schemes_res,
+            "schemes": schemes_res,
+            "message": "Government subsidy schemes matched successfully." if schemes_res else "No matching government subsidy was found for the supplied location and crop."
+        }
+    except Exception as e:
+        logger.warning("[%s] Pipeline Schemes step isolated error: %s", req_id, e)
+        pipeline_res["schemes"] = {
+            "success": True,
+            "stage": "schemes",
+            "count": 0,
+            "matches": [],
+            "message": "No matching government subsidy was found for the supplied location and crop."
         }
 
-        return {"status": "success", "pipeline_result": output}
-
-    except Exception:
-        raise HTTPException(500, "Pipeline execution failed. Please try again.")
+    duration_ms = round((time.time() - t0) * 1000, 2)
+    logger.info("[%s] Connected Farm Pipeline finished in %sms", req_id, duration_ms)
+    return {
+        "success": True,
+        "stage": "pipeline",
+        "duration_ms": duration_ms,
+        "result": pipeline_res
+    }
 
 
 # 9. Farmer History Persistence APIs

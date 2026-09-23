@@ -214,7 +214,7 @@ def get_soil_value(latitude, longitude, property_name):
     response = None
     for attempt in range(3):
         try:
-            response = requests.get(url, params=params, timeout=120)
+            response = requests.get(url, params=params, timeout=(5.0, 15.0))
             break
         except requests.exceptions.ConnectionError as e:
             print(f"{property_name}: Connection failed (attempt {attempt + 1}/3)")
@@ -304,38 +304,20 @@ def get_soil_value(latitude, longitude, property_name):
 # ============================================================
 
 def get_soil(latitude, longitude):
-    """Retrieve soil properties automatically from SoilGrids."""
-
-    print("\nRetrieving SoilGrids data...")
-    print(f"Latitude: {latitude}")
-    print(f"Longitude: {longitude}")
-
+    """Retrieve soil properties from SoilGrids with fast non-blocking fallback."""
     soil_data = {}
 
-    # --------------------------------------------------------
-    # 1. Retrieve SoilGrids properties
-    # --------------------------------------------------------
-    for property_name in SOIL_PROPERTIES:
-        val = None
-        coords_to_try = [
-            (latitude, longitude),
-            (latitude + 0.02, longitude),
-            (latitude - 0.02, longitude),
-            (latitude, longitude + 0.02),
-            (latitude, longitude - 0.02),
-            (latitude + 0.05, longitude + 0.05),
-            (latitude - 0.05, longitude - 0.05),
-        ]
-        for lat_try, lon_try in coords_to_try:
+    # 1. Quick single-pass attempt if rasterio is available
+    if _RASTERIO_OK:
+        for property_name in SOIL_PROPERTIES:
             try:
-                v = get_soil_value(lat_try, lon_try, property_name)
-                if v is not None and v > 0:
-                    val = v
-                    break
+                val = get_soil_value(latitude, longitude, property_name)
+                soil_data[property_name] = val
             except Exception:
-                continue
-
-        soil_data[property_name] = val
+                soil_data[property_name] = None
+    else:
+        for property_name in SOIL_PROPERTIES:
+            soil_data[property_name] = None
 
     # --------------------------------------------------------
     # 2. Soil type

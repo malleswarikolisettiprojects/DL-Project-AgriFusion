@@ -86,7 +86,7 @@ def get_districts(state: str):
 def _geocode(query: str):
     params = {"name": query, "count": 5, "language": "en", "format": "json"}
     try:
-        response = requests.get(OPENMETEO_GEOCODING_URL, params=params, timeout=10)
+        response = requests.get(OPENMETEO_GEOCODING_URL, params=params, timeout=(5.0, 10.0))
         if response.status_code == 200:
             data = response.json()
             if "results" in data and data["results"]:
@@ -106,7 +106,7 @@ def _geocode(query: str):
     try:
         nom_params = {"q": query, "format": "json", "limit": 1}
         headers = {"User-Agent": "AgriProject/1.0"}
-        nom_res = requests.get("https://nominatim.openstreetmap.org/search", params=nom_params, headers=headers, timeout=10)
+        nom_res = requests.get("https://nominatim.openstreetmap.org/search", params=nom_params, headers=headers, timeout=(5.0, 10.0))
         if nom_res.status_code == 200:
             nom_data = nom_res.json()
             if nom_data:

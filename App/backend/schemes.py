@@ -70,6 +70,10 @@ def recommend_schemes(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     # Normalize state detection
     is_ap = "andhra" in state_input or state_input == "ap"
     is_ts = "telangana" in state_input or "ts" in state_input or "tg" in state_input
+    is_valid_region = is_ap or is_ts or (not state_input) or ("india" in state_input)
+
+    if not is_valid_region:
+        return []
 
     horticulture_crops = {
         "banana", "mango", "papaya", "pomegranate", "grapes", "watermelon", "muskmelon",
@@ -81,9 +85,9 @@ def recommend_schemes(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     recommendations: List[Dict[str, Any]] = []
 
     # =========================================================================
-    # 1. ANDHRA PRADESH STATE SCHEMES (Included if AP selected or general query)
+    # 1. ANDHRA PRADESH STATE SCHEMES
     # =========================================================================
-    if is_ap or not is_ts:
+    if is_ap or (not is_ts and not state_input):
         # AP Rythu Bharosa / Annadata Sukhibhava
         recommendations.append(_scheme(
             id_="ap-rythu-bharosa",

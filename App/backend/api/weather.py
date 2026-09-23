@@ -67,7 +67,7 @@ def get_future_weather(
         response = requests.get(
             OPENMETEO_BASE_URL,
             params=params,
-            timeout=60
+            timeout=(5.0, 15.0)
         )
     except Exception as e:
         response = None
@@ -77,7 +77,7 @@ def get_future_weather(
         params["start_date"] = today.strftime("%Y-%m-%d")
         params["end_date"] = (today + pd.Timedelta(days=7)).strftime("%Y-%m-%d")
         try:
-            response = requests.get(OPENMETEO_BASE_URL, params=params, timeout=60)
+            response = requests.get(OPENMETEO_BASE_URL, params=params, timeout=(5.0, 15.0))
         except Exception:
             response = None
 

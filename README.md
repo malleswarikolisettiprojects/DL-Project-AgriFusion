@@ -13,7 +13,7 @@ AgriFusion is an AI-powered agricultural decision support system built for farme
 3. 💧 **Precision Irrigation**: Calculates daily water requirements ($ET_c$) using the FAO-56 method and gives pump operating hours and canal run times.
 4. 🌾 **Yield Prediction**: Estimates crop harvest yield in Tons per Hectare and Quintals per Hectare.
 5. 💰 **Market Price Prediction**: Forecasts market prices (₹/Quintal) on harvest dates and estimates expected revenue.
-6. 🔬 **Leaf Disease & Nutrient Diagnosis**: Identifies crop diseases, pests, and plant nutrient deficiencies from leaf photos using deep learning models (including PyTorch CNNs, YOLO, and HuggingFace **RF-DETR** vision transformers) and provides treatments.
+6. 🔬 **Leaf Disease Diagnosis**: Identifies crop diseases from leaf photos using deep learning models and provides treatments.
 7. 🏛️ **Government Schemes**: Recommends eligible central and state government farming schemes (YSR Rythu Bharosa, Rythu Bandhu, PM-KISAN, PMFBY, Drip Subsidies).
 8. 🤖 **Agronomy AI Chatbot**: An AI assistant powered by Google Gemini that answers farming questions using verified agricultural documents.
 9. ⚡ **All-in-One Farm Pipeline**: Runs crop, climate, irrigation, yield, and market predictions together in one step.
@@ -27,9 +27,9 @@ AgriFusion is an AI-powered agricultural decision support system built for farme
 User / Frontend (agrifusion.ai.studio)
        │
        ▼ (REST API Requests)
-FastAPI Backend Server (dl-project-agrifusion-backend.onrender.com)
+FastAPI Backend Server (App/backend/server.py)
        │
-       ├── 🧠 ML & Deep Learning Models (App/pickles & App/pt files, RF-DETR)
+       ├── 🧠 ML & Deep Learning Models (App/pickles & App/pt files)
        ├── 📚 Agronomy RAG Engine (Google Gemini AI + Agronomy Documents)
        ├── 🌐 External APIs (OpenMeteo Weather, ISRIC SoilGrids, OpenStreetMap)
        └── 🐘 Supabase Database (User Data & Records)
@@ -49,7 +49,7 @@ DL-Project streamlit/
 │   │   ├── irrigation.py         # Precision irrigation calculator
 │   │   ├── yields.py             # Crop yield estimator
 │   │   ├── market.py             # Market price forecaster
-│   │   ├── disease_detection.py  # Plant disease & RF-DETR nutrient deficiency detection
+│   │   ├── disease_detection.py  # Plant disease detection
 │   │   ├── agronomy_rag.py       # Gemini AI RAG chatbot
 │   │   └── schemes.py            # Government scheme matcher
 │   ├── frontend/                 # Admin Streamlit app
@@ -65,8 +65,8 @@ DL-Project streamlit/
 
 ## 🛠️ Technologies Used
 
-- **Backend API**: Python, FastAPI, Uvicorn
-- **Machine Learning & AI**: Scikit-Learn, PyTorch, RF-DETR (Vision Transformer), YOLO, Google Gemini API
+- **Backend**: Python, FastAPI, Uvicorn
+- **Machine Learning & AI**: Scikit-Learn, PyTorch, Google Gemini API
 - **Database**: Supabase (PostgreSQL)
 - **External Data APIs**: OpenMeteo (Weather), ISRIC SoilGrids (Soil), OpenStreetMap (Location)
 - **Deployment**: Render (Backend), Google AI Studio (Frontend)
