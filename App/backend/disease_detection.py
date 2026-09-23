@@ -12,13 +12,8 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
 from PIL import Image, ImageDraw
 
-# ultralytics / YOLO is optional — local models will be skipped if not installed
-try:
-    from ultralytics import YOLO as _YOLO
-    _ULTRALYTICS_OK = True
-except ImportError:
-    _ULTRALYTICS_OK = False
-    _YOLO = None  # type: ignore
+# ultralytics / YOLO is optional — loaded lazily if run_local is invoked
+_model_cache = {}
 
 from App.backend.agronomy_rag import generate_rag_remedies
 from App.backend.settings import ROBOFLOW_API_KEY, HF_TOKEN, SUPABASE_BUCKET, create_supabase_client
@@ -163,9 +158,12 @@ def normalize_detections(items: list[dict[str, Any]], source: str) -> list[dict[
 
 
 def run_local(config: dict[str, str], image: Image.Image) -> dict[str, Any]:
-    if not _ULTRALYTICS_OK:
+    try:
+        from ultralytics import YOLO
+    except ImportError:
         return {"provider": "local", "model": config.get("name", ""), "status": "skipped",
                 "error": "ultralytics not installed", "detections": [], "top_confidence": 0.0}
+
     path = MODELS_DIR / config["path"]
     if not path.exists() and PT_FILES_DIR.exists():
         fallback_pt = PT_FILES_DIR / Path(config["path"]).name
@@ -178,7 +176,7 @@ def run_local(config: dict[str, str], image: Image.Image) -> dict[str, Any]:
                 "detections": [], "top_confidence": 0.0}
 
     if str(path) not in _model_cache:
-        _model_cache[str(path)] = _YOLO(str(path))
+        _model_cache[str(path)] = YOLO(str(path))
     result = _model_cache[str(path)].predict(source=image, conf=CONFIDENCE, iou=IOU, max_det=MAX_DETECTIONS, verbose=False)[0]
     names = result.names
     detections = []
