@@ -94,14 +94,16 @@ app.include_router(admin_router)
 allowed_origins = [
     "http://localhost:5173",
     "http://localhost:3000",
+    "https://agrifusion.ai.studio",
+    "http://agrifusion.ai.studio",
 ]
 frontend_url = os.getenv("FRONTEND_URL")
-if frontend_url:
+if frontend_url and frontend_url.rstrip("/") not in allowed_origins:
     allowed_origins.append(frontend_url.rstrip("/"))
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins if frontend_url else ["*"],
+    allow_origins=["*"] if not frontend_url else allowed_origins,
     allow_credentials=False,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=[
