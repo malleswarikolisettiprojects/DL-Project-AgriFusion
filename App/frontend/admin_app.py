@@ -1,14 +1,16 @@
 """
-AgriFusion — Interactive Streamlit Admin Portal
-=================================================
-Connects to AgriFusion FastAPI Backend (default http://127.0.0.1:8000 or http://localhost:10000).
+AgriFusion — Central Admin & Agronomy Management Portal
+=========================================================
+Connects to AgriFusion FastAPI Backend (default http://127.0.0.1:8000 or set AGRIFUSION_API_URL).
 Provides administrative workflows for:
-  1. 🔑 Admin Authentication (JWT bearer login)
-  2. 📚 Knowledge Sources Registry & File Uploads (.pdf, .docx, .txt, .md, website URLs)
-  3. 🏛️ Government Schemes Verification Registry
-  4. 🩺 Agronomic Advisory Quality & Compliance Audit
-  5. 💬 Farmer Feedback & Review System
-  6. 🛡️ Tamper-Evident Audit Logs & CSV Export
+  1. 📊 Executive Dashboard Overview & System Metrics
+  2. 👤 User Management Directory (Filters: role, status, search)
+  3. 🚜 Regional Farm Profiles Aggregation (Filter: state)
+  4. 📚 RAG Knowledge Sources Registry & Document Ingestion
+  5. 🏛️ Central & State Government Schemes Registry
+  6. 🩺 Agronomic Advisory Quality & Compliance Audit (Filters: state, no_verified_source, review_status)
+  7. 💬 Farmer Feedback & Support Reports
+  8. 🛡️ Security Audit Logs & CSV Export (Filter: action)
 """
 
 import json
@@ -40,6 +42,7 @@ def get_headers():
 
 # ── Header Bar ───────────────────────────────────────────────────────────────
 st.title("🌾 AgriFusion — Central Admin & Agronomy Management Portal")
+st.caption(f"Backend Target: `{API_BASE_URL}`")
 st.markdown("---")
 
 # ── Authentication Screen ────────────────────────────────────────────────────
@@ -50,7 +53,7 @@ if not st.session_state.token:
     col1, col2 = st.columns([1, 1])
     with col1:
         username = st.text_input("Username / Email", value="admin@agrifusion.com")
-        password = st.text_input("Password", type="password")
+        password = st.text_input("Password", type="password", value="Admin@123456")
         login_btn = st.button("Log In to Admin Portal", type="primary")
 
         if login_btn:
@@ -86,11 +89,13 @@ with st.sidebar:
         "Admin Modules",
         [
             "📊 Dashboard Overview",
-            "📚 RAG Knowledge Sources & Uploads",
-            "🏛️ Government Schemes Registry",
+            "👤 User Directory",
+            "🚜 Regional Farm Profiles",
             "🩺 Advisory Quality & Audit",
-            "💬 Farmer Feedback & Support",
             "🛡️ Security Audit Logs",
+            "📚 RAG Knowledge Sources",
+            "🏛️ Government Schemes Registry",
+            "💬 Farmer Feedback & Support",
         ],
     )
 
@@ -98,35 +103,232 @@ with st.sidebar:
 # MODULE 1: DASHBOARD OVERVIEW
 # =============================================================================
 if menu == "📊 Dashboard Overview":
-    st.header("📊 Executive Overview & System Status")
+    st.header("📊 Executive Overview & System Metrics")
     
-    col1, col2, col3, col4 = st.columns(4)
     try:
-        sources_res = requests.get(f"{API_BASE_URL}/api/v1/admin/sources", headers=get_headers()).json()
-        schemes_res = requests.get(f"{API_BASE_URL}/api/v1/admin/schemes", headers=get_headers()).json()
-        feedback_res = requests.get(f"{API_BASE_URL}/api/v1/admin/feedback", headers=get_headers()).json()
-        advisories_res = requests.get(f"{API_BASE_URL}/api/v1/admin/advisories", headers=get_headers()).json()
+        overview_res = requests.get(f"{API_BASE_URL}/api/v1/admin/overview", headers=get_headers(), timeout=10)
+        if overview_res.status_code == 200:
+            ov_data = overview_res.json()
+            metrics = ov_data.get("metrics", {})
+            
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Total Users", metrics.get("total_users", 0))
+            c2.metric("Advisory Queries", metrics.get("advisory_queries", 0))
+            c3.metric("Prediction Requests", metrics.get("prediction_requests", 0))
+            c4.metric("Failed Requests", metrics.get("failed_requests", 0))
+            c5.metric("Feedback Awaiting Review", metrics.get("feedback_awaiting_review", 0))
 
-        col1.metric("Registered Sources", sources_res.get("total", 0))
-        col2.metric("Verified Schemes", schemes_res.get("total", 0))
-        col3.metric("Farmer Feedback Reports", feedback_res.get("total", 0))
-        col4.metric("Advisory RAG Activity Logs", advisories_res.get("total", 0))
+            st.markdown("---")
+            st.subheader("⚡ Model Latency Benchmarks")
+            latencies = metrics.get("model_latencies", {})
+            l_cols = st.columns(len(latencies) if latencies else 1)
+            for idx, (model_name, lat_val) in enumerate(latencies.items()):
+                l_cols[idx % len(l_cols)].metric(f"{model_name.capitalize()} Engine", lat_val)
+        else:
+            st.warning(f"Overview status {overview_res.status_code}: {overview_res.text}")
     except Exception as err:
-        st.warning(f"Could not load live statistics: {err}")
-
-    st.markdown("### Quick Administrative Actions")
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        st.info("📚 **Knowledge Sources**\nUpload documents or website links to expand RAG response data.")
-    with c2:
-        st.info("🏛️ **Government Schemes**\nVerify AP & Telangana state subsidies and update official URLs.")
-    with c3:
-        st.info("🩺 **Agronomic Compliance**\nReview AI advisory responses for dosage safety and citations.")
+        st.warning(f"Could not load live overview statistics: {err}")
 
 # =============================================================================
-# MODULE 2: RAG KNOWLEDGE SOURCES & UPLOADS
+# MODULE 2: USER DIRECTORY
 # =============================================================================
-elif menu == "📚 RAG Knowledge Sources & Uploads":
+elif menu == "👤 User Directory":
+    st.header("👤 User Management & Role Directory")
+    
+    col_f1, col_f2, col_f3 = st.columns(3)
+    with col_f1:
+        role_filter = st.selectbox("Filter by Role", ["All", "farmer", "user", "agronomist", "admin", "auditor"])
+    with col_f2:
+        status_filter = st.selectbox("Filter by Status", ["All", "active", "suspended", "pending"])
+    with col_f3:
+        search_query = st.text_input("Search Users (Email / Name)", value="")
+
+    params = {"page": 1, "page_size": 50}
+    if role_filter != "All":
+        params["role"] = role_filter
+    if status_filter != "All":
+        params["status"] = status_filter
+    if search_query.strip():
+        params["search"] = search_query.strip()
+
+    try:
+        u_res = requests.get(f"{API_BASE_URL}/api/v1/admin/users", headers=get_headers(), params=params, timeout=10)
+        if u_res.status_code == 200:
+            u_data = u_res.json()
+            users_list = u_data.get("items", [])
+            st.subheader(f"Total Matching Users: {u_data.get('total', len(users_list))}")
+
+            if users_list:
+                for u in users_list:
+                    status_badge = "🟢 Active" if u.get("status") == "active" else "🔴 Suspended"
+                    with st.expander(f"👤 {u.get('name') or 'User'} ({u.get('email')}) — Role: `{u.get('role')}` | Status: {status_badge}"):
+                        st.write(f"**User ID:** `{u.get('id')}` | **Created:** `{u.get('created_at')}`")
+                        
+                        btn_c1, btn_c2 = st.columns(2)
+                        with btn_c1:
+                            new_status = st.selectbox("Update Account Status", ["active", "suspended", "archived"], key=f"stat_sel_{u['id']}")
+                            if st.button("Save Status", key=f"save_stat_{u['id']}"):
+                                rx = requests.patch(
+                                    f"{API_BASE_URL}/api/v1/admin/users/{u['id']}/status",
+                                    headers=get_headers(),
+                                    json={"status": new_status},
+                                )
+                                if rx.status_code == 200:
+                                    st.success("Status updated!")
+                                    st.rerun()
+                                else:
+                                    st.error(rx.json().get("detail", "Failed"))
+                        with btn_c2:
+                            new_role = st.selectbox("Update Authorization Role", ["user", "agronomist", "admin", "auditor"], key=f"role_sel_{u['id']}")
+                            if st.button("Save Role", key=f"save_role_{u['id']}"):
+                                rx = requests.patch(
+                                    f"{API_BASE_URL}/api/v1/admin/users/{u['id']}/role",
+                                    headers=get_headers(),
+                                    json={"role": new_role},
+                                )
+                                if rx.status_code == 200:
+                                    st.success("Role updated!")
+                                    st.rerun()
+                                else:
+                                    st.error(rx.json().get("detail", "Failed"))
+            else:
+                st.info("No registered users match the selected filters.")
+        else:
+            st.error(f"Failed to fetch users: {u_res.text}")
+    except Exception as err:
+        st.error(f"Error connecting to users directory API: {err}")
+
+# =============================================================================
+# MODULE 3: REGIONAL FARM PROFILES
+# =============================================================================
+elif menu == "🚜 Regional Farm Profiles":
+    st.header("🚜 Regional Farm Profiles & Crop Aggregations")
+    
+    state_f = st.selectbox(
+        "Filter by State",
+        ["All", "Andhra Pradesh", "Telangana", "Karnataka", "Punjab", "Maharashtra", "Tamil Nadu", "Gujarat"]
+    )
+    
+    params = {"page": 1, "page_size": 50}
+    if state_f != "All":
+        params["state"] = state_f
+
+    try:
+        f_res = requests.get(f"{API_BASE_URL}/api/v1/admin/farms", headers=get_headers(), params=params, timeout=10)
+        if f_res.status_code == 200:
+            f_data = f_res.json()
+            farms = f_data.get("items", [])
+            st.subheader(f"Matching Regional Farm Clusters: {f_data.get('total', len(farms))}")
+            st.caption(f_data.get("privacy_note", ""))
+
+            if farms:
+                st.dataframe(farms, use_container_width=True)
+            else:
+                st.info("No farm profile clusters found for the selected state.")
+        else:
+            st.error(f"Failed to load farm profiles: {f_res.text}")
+    except Exception as err:
+        st.error(f"Error fetching farm profiles: {err}")
+
+# =============================================================================
+# MODULE 4: ADVISORY QUALITY & AUDIT
+# =============================================================================
+elif menu == "🩺 Advisory Quality & Audit":
+    st.header("🩺 Farmer Advisory Quality & Compliance Monitoring")
+
+    a_col1, a_col2, a_col3 = st.columns(3)
+    with a_col1:
+        adv_state_f = st.selectbox("State Filter", ["All", "Andhra Pradesh", "Telangana", "Karnataka", "Punjab", "Maharashtra"])
+    with a_col2:
+        no_source_only = st.checkbox("Advisories - No Verified Sources Only", value=False)
+    with a_col3:
+        requires_review_only = st.checkbox("Requires Review Only", value=False)
+
+    params = {"page": 1, "page_size": 50}
+    if adv_state_f != "All":
+        params["state"] = adv_state_f
+    if no_source_only:
+        params["status"] = "no_verified_source"
+    if requires_review_only:
+        params["review_status"] = "needs_review"
+
+    try:
+        adv_res = requests.get(f"{API_BASE_URL}/api/v1/admin/advisories", headers=get_headers(), params=params, timeout=10)
+        if adv_res.status_code == 200:
+            adv_data = adv_res.json()
+            items = adv_data.get("items", [])
+            st.subheader(f"Logged Advisory Telemetry Events: {adv_data.get('total', len(items))}")
+
+            if items:
+                for adv in items:
+                    comp = adv.get("compliance", {})
+                    status_color = "🟢 Passed" if comp.get("compliance_status") == "passed" else "🟡 Needs Review"
+                    with st.expander(f"🔍 {adv.get('query_summary')} ({adv.get('crop') or 'General'}) — Compliance: {status_color}"):
+                        st.write(f"**Date:** {adv.get('created_at')} | **State:** {adv.get('state')} | **Status:** `{adv.get('activity_status')}`")
+                        st.json(comp)
+                        
+                        note_text = st.text_input("Add Agronomist Note", key=f"note_{adv['query_id']}")
+                        if st.button("Submit Agronomist Note", key=f"sub_note_{adv['query_id']}"):
+                            nx = requests.post(
+                                f"{API_BASE_URL}/api/v1/admin/advisories/{adv['query_id']}/note",
+                                headers=get_headers(),
+                                json={"note": note_text},
+                            )
+                            if nx.status_code == 200:
+                                st.success("Agronomist review note recorded!")
+                                st.rerun()
+            else:
+                st.info("No advisory telemetry logs match the selected filters.")
+        else:
+            st.error(f"Failed to fetch advisory activities: {adv_res.text}")
+    except Exception as err:
+        st.error(f"Failed to fetch advisory compliance records: {err}")
+
+# =============================================================================
+# MODULE 5: SECURITY AUDIT LOGS
+# =============================================================================
+elif menu == "🛡️ Security Audit Logs":
+    st.header("🛡️ Administrative Audit Trail & Compliance Export")
+
+    action_f = st.selectbox(
+        "Filter by Action Type",
+        ["All Actions", "USER_LOGIN", "DOCUMENT_UPLOAD", "SCHEME_VERIFY", "ROLE_UPDATE", "FEEDBACK_REVIEW", "user_status_changed", "user_role_changed", "source_viewed"]
+    )
+
+    params = {"page": 1, "page_size": 100}
+    if action_f != "All Actions":
+        params["action"] = action_f
+
+    try:
+        audit_res = requests.get(f"{API_BASE_URL}/api/v1/admin/audit-logs", headers=get_headers(), params=params, timeout=10)
+        if audit_res.status_code == 200:
+            audit_data = audit_res.json()
+            logs = audit_data.get("items", [])
+            st.subheader(f"Total Logged Security Events: {audit_data.get('total', len(logs))}")
+
+            if logs:
+                st.dataframe(logs, use_container_width=True)
+            else:
+                st.info("No audit logs match the selected action filter.")
+
+            if st.button("📥 Export Tamper-Evident Audit Trail CSV"):
+                csv_res = requests.get(f"{API_BASE_URL}/api/v1/admin/audit-logs/export", headers=get_headers())
+                if csv_res.status_code == 200:
+                    st.download_button(
+                        label="Click to Download Audit CSV",
+                        data=csv_res.content,
+                        file_name="agrifusion_admin_audit_logs.csv",
+                        mime="text/csv",
+                    )
+        else:
+            st.error(f"Failed to load audit logs: {audit_res.text}")
+    except Exception as err:
+        st.error(f"Failed to load audit logs: {err}")
+
+# =============================================================================
+# MODULE 6: RAG KNOWLEDGE SOURCES
+# =============================================================================
+elif menu == "📚 RAG Knowledge Sources":
     st.header("📚 Canonical Knowledge Sources & Document Ingestion")
 
     st.subheader("1. Upload Custom Agronomy Document (PDF, DOCX, TXT, MD)")
@@ -141,7 +343,7 @@ elif menu == "📚 RAG Knowledge Sources & Uploads":
         upload_btn = st.button("🚀 Upload & Index into RAG", type="primary")
 
         if upload_btn and uploaded_file:
-            with st.spinner("Processing document and indexing into vector store..."):
+            with st.spinner("Processing document and indexing..."):
                 try:
                     files = {"file": (uploaded_file.name, uploaded_file.getvalue(), uploaded_file.type)}
                     data = {
@@ -157,46 +359,15 @@ elif menu == "📚 RAG Knowledge Sources & Uploads":
                         data=data,
                     )
                     if res.status_code == 201:
-                        st.success(f"Successfully uploaded and indexed `{uploaded_file.name}` into RAG knowledge base!")
+                        st.success(f"Successfully uploaded and indexed `{uploaded_file.name}`!")
                     else:
                         st.error(f"Upload failed: {res.json().get('detail', res.text)}")
                 except Exception as e:
                     st.error(f"Error connecting to server: {e}")
 
     st.markdown("---")
-    st.subheader("2. Register Official Agriculture Website URL")
-    web_col1, web_col2 = st.columns([2, 1])
-    with web_col1:
-        web_url = st.text_input("Official Website URL", value="https://")
-        web_title = st.text_input("Portal Title", value="TNAU Agritech Crop Protection Guide")
-    with web_col2:
-        web_org = st.text_input("Institute / University", value="TNAU")
-        web_btn = st.button("🌐 Register & Scrape Web Source")
-
-        if web_btn and web_url and web_url != "https://":
-            try:
-                res = requests.post(
-                    f"{API_BASE_URL}/api/v1/admin/sources/register",
-                    headers=get_headers(),
-                    json={
-                        "title": web_title,
-                        "organization": web_org,
-                        "source_type": "official_scheme_portal",
-                        "official_url": web_url,
-                        "subject": "Web Agricultural Advisory",
-                    },
-                )
-                if res.status_code == 201:
-                    st.success("Website URL successfully registered into knowledge sources!")
-                else:
-                    st.error(f"Registration failed: {res.json().get('detail', res.text)}")
-            except Exception as e:
-                st.error(f"Error connecting to server: {e}")
-
-    st.markdown("---")
-    st.subheader("3. Registered Knowledge Sources Registry")
-
-    search_query = st.text_input("Search Sources Registry by title, organization, or URL", value="")
+    st.subheader("2. Registered Knowledge Sources Registry")
+    search_query = st.text_input("Search Sources Registry by title or organization", value="")
     try:
         res = requests.get(
             f"{API_BASE_URL}/api/v1/admin/sources",
@@ -209,41 +380,15 @@ elif menu == "📚 RAG Knowledge Sources & Uploads":
             for s in sources:
                 with st.expander(f"📄 {s.get('title')} ({s.get('organization')}) — Status: {s.get('verification_status')}"):
                     st.write(f"**ID:** `{s.get('id')}` | **Format:** `{s.get('document_format')}` | **Language:** `{s.get('language')}`")
-                    st.write(f"**Official URL / File Path:** `{s.get('official_url')}`")
-                    st.write(f"**State Relevance:** {', '.join(s.get('state_relevance', []))}")
+                    st.write(f"**Official URL / Path:** `{s.get('official_url')}`")
                     st.write(f"**Index Status:** `{s.get('index_status')}`")
-
-                    c1, c2, c3 = st.columns(3)
-                    with c1:
-                        if st.button("🔄 Queue Re-index", key=f"reindex_{s['id']}"):
-                            rx = requests.post(f"{API_BASE_URL}/api/v1/admin/sources/{s['id']}/reindex", headers=get_headers())
-                            if rx.status_code == 200:
-                                st.success("Re-indexing queued!")
-                            else:
-                                st.error(rx.json().get("detail"))
-                    with c2:
-                        if st.button("✅ Mark Verified", key=f"ver_{s['id']}"):
-                            px = requests.patch(
-                                f"{API_BASE_URL}/api/v1/admin/sources/{s['id']}",
-                                headers=get_headers(),
-                                json={"verification_status": "verified"},
-                            )
-                            if px.status_code == 200:
-                                st.success("Source verified!")
-                                st.rerun()
-                    with c3:
-                        if st.button("🗑️ Delete Source", key=f"del_{s['id']}"):
-                            dx = requests.delete(f"{API_BASE_URL}/api/v1/admin/sources/{s['id']}", headers=get_headers())
-                            if dx.status_code == 200:
-                                st.success("Deleted source.")
-                                st.rerun()
         else:
             st.info("No knowledge sources match the search criteria.")
     except Exception as err:
         st.error(f"Failed to fetch knowledge sources: {err}")
 
 # =============================================================================
-# MODULE 3: GOVERNMENT SCHEMES REGISTRY
+# MODULE 7: GOVERNMENT SCHEMES REGISTRY
 # =============================================================================
 elif menu == "🏛️ Government Schemes Registry":
     st.header("🏛️ Central & State Government Schemes Registry")
@@ -259,62 +404,11 @@ elif menu == "🏛️ Government Schemes Registry":
                 st.write(f"**Official Portal:** [{sch.get('official_portal')}]({sch.get('official_portal')})")
                 st.write(f"**Benefit Summary:** {sch.get('benefit_summary')}")
                 st.write(f"**Required Documents:** {', '.join(sch.get('required_documents', []))}")
-                
-                v1, v2 = st.columns(2)
-                with v1:
-                    new_ver = st.selectbox(
-                        "Update Verification Status",
-                        ["pending_review", "verified", "verified_with_caveats", "stale", "unavailable", "rejected"],
-                        index=1 if sch.get("verification_status") == "verified" else 0,
-                        key=f"sch_ver_{sch['id']}",
-                    )
-                with v2:
-                    if st.button("Save Status Update", key=f"save_sch_{sch['id']}"):
-                        up_res = requests.patch(
-                            f"{API_BASE_URL}/api/v1/admin/schemes/{sch['id']}",
-                            headers=get_headers(),
-                            json={"verification_status": new_ver},
-                        )
-                        if up_res.status_code == 200:
-                            st.success("Scheme status updated!")
-                            st.rerun()
     except Exception as err:
         st.error(f"Error fetching schemes registry: {err}")
 
 # =============================================================================
-# MODULE 4: ADVISORY QUALITY & AUDIT
-# =============================================================================
-elif menu == "🩺 Advisory Quality & Audit":
-    st.header("🩺 Farmer Advisory Quality & Compliance Monitoring")
-
-    try:
-        res = requests.get(f"{API_BASE_URL}/api/v1/admin/advisories", headers=get_headers()).json()
-        items = res.get("items", [])
-
-        if items:
-            for adv in items:
-                comp = adv.get("compliance", {})
-                status_color = "🟢 Passed" if comp.get("compliance_status") == "passed" else "🟡 Needs Review"
-                with st.expander(f"🔍 {adv.get('query_summary')} ({adv.get('crop') or 'General'}) — Compliance: {status_color}"):
-                    st.write(f"**Date:** {adv.get('created_at')} | **State:** {adv.get('state')} | **Status:** {adv.get('activity_status')}")
-                    st.json(comp)
-                    
-                    note_text = st.text_input("Add Agronomist Note", key=f"note_{adv['query_id']}")
-                    if st.button("Submit Agronomist Note", key=f"sub_note_{adv['query_id']}"):
-                        nx = requests.post(
-                            f"{API_BASE_URL}/api/v1/admin/advisories/{adv['query_id']}/note",
-                            headers=get_headers(),
-                            json={"note": note_text},
-                        )
-                        if nx.status_code == 200:
-                            st.success("Agronomist review note recorded!")
-        else:
-            st.info("No advisory telemetry logs available yet.")
-    except Exception as err:
-        st.error(f"Failed to fetch advisory compliance records: {err}")
-
-# =============================================================================
-# MODULE 5: FARMER FEEDBACK & SUPPORT
+# MODULE 8: FARMER FEEDBACK & SUPPORT
 # =============================================================================
 elif menu == "💬 Farmer Feedback & Support":
     st.header("💬 Farmer Feedback Reports & Review Dashboard")
@@ -326,47 +420,9 @@ elif menu == "💬 Farmer Feedback & Support":
         if reports:
             for f in reports:
                 with st.expander(f"⭐ Rating {f.get('rating')}/5 — {f.get('category')} ({f.get('status')})"):
-                    st.write(f"**Farmer Comment:** {f.get('comment')}")
+                    st.write(f"**Farmer Comment:** {f.get('comment') or f.get('message')}")
                     st.write(f"**Date:** {f.get('created_at')} | **Priority:** `{f.get('priority')}`")
-
-                    c1, c2 = st.columns(2)
-                    with c1:
-                        new_status = st.selectbox("Status", ["received", "in_review", "resolved", "dismissed"], key=f"stat_{f['id']}")
-                    with c2:
-                        if st.button("Update Status", key=f"btn_f_{f['id']}"):
-                            rx = requests.patch(
-                                f"{API_BASE_URL}/api/v1/admin/feedback/{f['id']}",
-                                headers=get_headers(),
-                                json={"status": new_status},
-                            )
-                            if rx.status_code == 200:
-                                st.success("Feedback status updated!")
-                                st.rerun()
         else:
             st.info("No farmer feedback reports submitted yet.")
     except Exception as err:
         st.error(f"Failed to fetch farmer feedback: {err}")
-
-# =============================================================================
-# MODULE 6: SECURITY AUDIT LOGS
-# =============================================================================
-elif menu == "🛡️ Security Audit Logs":
-    st.header("🛡️ Administrative Audit Trail & Compliance Export")
-
-    try:
-        res = requests.get(f"{API_BASE_URL}/api/v1/admin/audit-logs", headers=get_headers()).json()
-        logs = res.get("items", [])
-
-        st.dataframe(logs, use_container_width=True)
-
-        if st.button("📥 Export Tamper-Evident Audit Trail CSV"):
-            csv_res = requests.get(f"{API_BASE_URL}/api/v1/admin/audit-logs/export", headers=get_headers())
-            if csv_res.status_code == 200:
-                st.download_button(
-                    label="Click to Download Audit CSV",
-                    data=csv_res.content,
-                    file_name="agrifusion_admin_audit_logs.csv",
-                    mime="text/csv",
-                )
-    except Exception as err:
-        st.error(f"Failed to load audit logs: {err}")

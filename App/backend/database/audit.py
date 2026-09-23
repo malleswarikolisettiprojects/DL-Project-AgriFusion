@@ -94,37 +94,60 @@ async def record_audit_event(
         return False
 
 
-def fetch_audit_logs(page: int = 1, page_size: int = 25) -> Dict[str, Any]:
-    """Fetch audit logs for authorized admin review."""
+def fetch_audit_logs(page: int = 1, page_size: int = 25, action: Optional[str] = None) -> Dict[str, Any]:
+    """Fetch audit logs for authorized admin review with optional action filtering."""
     init_audit_db()
     offset = (page - 1) * page_size
 
     if supabase is not None:
         try:
+            query = supabase.table("admin_audit_logs").select("*", count="exact")
+            if action:
+                query = query.eq("action", action)
             res = (
-                supabase.table("admin_audit_logs")
-                .select("*")
-                .order("created_at", desc=True)
+                query.order("created_at", desc=True)
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
             if res.data is not None:
-                return {"items": res.data, "page": page, "page_size": page_size}
+                total = res.count if res.count is not None else len(res.data)
+                return {"items": res.data, "page": page, "page_size": page_size, "total": total}
         except Exception:
             pass
 
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            SELECT id, admin_user_id, action, target_type, target_id, safe_metadata, created_at
-            FROM admin_audit_logs
-            ORDER BY id DESC
-            LIMIT ? OFFSET ?
-            """,
-            (page_size, offset),
-        )
+        if action:
+            cursor.execute(
+                """
+                SELECT COUNT(*) as cnt FROM admin_audit_logs WHERE action = ?
+                """,
+                (action,),
+            )
+            total = cursor.fetchone()["cnt"]
+            cursor.execute(
+                """
+                SELECT id, admin_user_id, action, target_type, target_id, safe_metadata, created_at
+                FROM admin_audit_logs
+                WHERE action = ?
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (action, page_size, offset),
+            )
+        else:
+            cursor.execute("SELECT COUNT(*) as cnt FROM admin_audit_logs")
+            total = cursor.fetchone()["cnt"]
+            cursor.execute(
+                """
+                SELECT id, admin_user_id, action, target_type, target_id, safe_metadata, created_at
+                FROM admin_audit_logs
+                ORDER BY id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (page_size, offset),
+            )
         rows = cursor.fetchall()
         conn.close()
 
@@ -145,6 +168,6 @@ def fetch_audit_logs(page: int = 1, page_size: int = 25) -> Dict[str, Any]:
                 "safe_metadata": meta,
                 "created_at": r["created_at"],
             })
-        return {"items": items, "page": page, "page_size": page_size}
+        return {"items": items, "page": page, "page_size": page_size, "total": total}
     except Exception:
-        return {"items": [], "page": page, "page_size": page_size}
+        return {"items": [], "page": page, "page_size": page_size, "total": 0}

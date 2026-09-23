@@ -699,6 +699,7 @@ async def get_regional_farm_profiles(
         irrigation_type=irrigation_type,
         page=page,
         page_size=page_size,
+        min_group_threshold=1,
     )
     return data
 
@@ -926,10 +927,11 @@ async def add_admin_feedback_note(
 async def get_audit_logs(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
+    action: Optional[str] = Query(None),
     admin_user: CurrentUser = Depends(require_admin),
 ):
-    """Query audit logs authorized for administrators only."""
-    logs = fetch_audit_logs(page=page, page_size=page_size)
+    """Query audit logs authorized for administrators only with optional action filtering."""
+    logs = fetch_audit_logs(page=page, page_size=page_size, action=action)
     return logs
 
 
