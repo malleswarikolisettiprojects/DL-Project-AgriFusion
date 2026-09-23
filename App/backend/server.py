@@ -297,7 +297,7 @@ async def api_predict_crop(
         payload = {"state": req.state, "district": req.district, "village": req.village, "start_date": req.sowing_date}
         result = await asyncio.wait_for(
             run_in_threadpool(predict_crop, payload),
-            timeout=25.0,
+            timeout=35.0,
         )
         try:
             save_crop_prediction({**result, "user_email": user_email})
@@ -310,7 +310,7 @@ async def api_predict_crop(
         logger.warning("[%s] Crop input validation warning: %s", req_id, ve)
         return make_error_response(422, "crop", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
-        logger.error("[%s] Crop prediction TIMEOUT (>25s)", req_id)
+        logger.error("[%s] Crop prediction TIMEOUT (>35s)", req_id)
         return make_error_response(504, "crop", "CROP_SERVICE_TIMEOUT", "Crop recommendation request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Crop prediction failed: %s", req_id, err)
@@ -335,7 +335,7 @@ async def api_predict_climate(
         }
         result = await asyncio.wait_for(
             run_in_threadpool(predict_climate_risk, payload),
-            timeout=25.0,
+            timeout=35.0,
         )
         result.pop("daily_data", None)
         result.pop("hourly_data", None)
@@ -346,7 +346,7 @@ async def api_predict_climate(
         logger.warning("[%s] Climate risk input validation warning: %s", req_id, ve)
         return make_error_response(422, "climate", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
-        logger.error("[%s] Climate risk prediction TIMEOUT (>25s)", req_id)
+        logger.error("[%s] Climate risk prediction TIMEOUT (>35s)", req_id)
         return make_error_response(504, "climate", "CLIMATE_SERVICE_TIMEOUT", "Climate risk prediction request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Climate risk prediction failed: %s", req_id, err)
@@ -374,7 +374,7 @@ async def api_predict_irrigation(
         }
         result = await asyncio.wait_for(
             run_in_threadpool(predict_irrigation, payload),
-            timeout=25.0,
+            timeout=35.0,
         )
         try:
             save_irrigation_prediction({**result, "user_email": user_email})
@@ -387,7 +387,7 @@ async def api_predict_irrigation(
         logger.warning("[%s] Irrigation input validation warning: %s", req_id, ve)
         return make_error_response(422, "irrigation", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
-        logger.error("[%s] Irrigation calculation TIMEOUT (>25s)", req_id)
+        logger.error("[%s] Irrigation calculation TIMEOUT (>35s)", req_id)
         return make_error_response(504, "irrigation", "IRRIGATION_SERVICE_TIMEOUT", "Irrigation calculation timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Irrigation calculation failed: %s", req_id, err)
@@ -415,7 +415,7 @@ async def api_predict_yield(
         }
         result = await asyncio.wait_for(
             run_in_threadpool(predict_yield, payload),
-            timeout=25.0,
+            timeout=35.0,
         )
         try:
             save_yield_prediction({**result, "user_email": user_email})
@@ -428,7 +428,7 @@ async def api_predict_yield(
         logger.warning("[%s] Yield input validation warning: %s", req_id, ve)
         return make_error_response(422, "yield", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
-        logger.error("[%s] Yield prediction TIMEOUT (>25s)", req_id)
+        logger.error("[%s] Yield prediction TIMEOUT (>35s)", req_id)
         return make_error_response(504, "yield", "YIELD_SERVICE_TIMEOUT", "Yield estimation timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Yield prediction failed: %s", req_id, err)
