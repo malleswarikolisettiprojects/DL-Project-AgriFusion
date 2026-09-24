@@ -1,11 +1,16 @@
 import csv
 import io
+import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
 
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
 from pydantic import BaseModel, Field
+
 
 from App.backend.agronomy_rag import AGRONOMY_DOCUMENT_LINKS, load_local_agronomy_documents
 from App.backend.auth.dependencies import (
@@ -696,15 +701,28 @@ async def get_admin_users(
     """
     List user directory with pagination, search, role, and status filters.
     Returns safe user attributes only (passwords, hashes, and tokens omitted).
+    Fails closed with 500 error if database is unavailable.
     """
-    res = fetch_all_users(
-        page=page,
-        page_size=page_size,
-        search=search,
-        role_filter=role,
-        status_filter=status,
-    )
-    return res
+    try:
+        res = fetch_all_users(
+            page=page,
+            page_size=page_size,
+            search=search,
+            role_filter=role,
+            status_filter=status,
+        )
+        return res
+    except Exception as exc:
+        correlation_id = uuid.uuid4().hex[:8]
+        logger.error(
+            "Admin user directory database error [correlation_id=%s]: %s",
+            correlation_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="The backend encountered an internal error.",
+        )
 
 
 @admin_router.get("/users/{user_id}", response_model=AdminUserResponse)
@@ -747,16 +765,18 @@ async def update_user_status(
     # Self-suspension protection / last admin protection
     if target and target.get("role") in ("admin", "super_admin") and payload.status != "active":
         active_admins = count_active_admins_in_db()
-        if active_admins <= 1:
+        if active_admins <= 1 or user_id == admin_user.id:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=400,
                 detail="Cannot suspend or archive the final remaining administrator.",
             )
 
     ok = update_user_status_in_db(user_id, payload.status)
     if not ok:
-        # Idempotent response or default update
-        pass
+        raise HTTPException(
+            status_code=500,
+            detail="The backend encountered an internal error.",
+        )
 
     # Record audit log event
     await record_audit_event(
@@ -787,24 +807,34 @@ async def update_user_role(
 ):
     """
     Assign or update a user's authorization role.
-    Supports multi-tier roles: Super Admin, Admin, Auditor, Agronomist, Editor, User.
+    Supports multi-tier roles: Super Admin, Admin, Auditor, Agronomist, Editor, Farmer.
     Records an administrative audit log event upon success and prevents final admin demotion.
     """
     target = get_user_by_id(user_id)
-    previous_role = target.get("role", "user") if target else "user"
+    previous_role = target.get("role", "farmer") if target else "farmer"
+
+    # Privilege escalation protection: only super_admin can assign super_admin
+    if payload.role == "super_admin" and admin_user.role != "super_admin":
+        raise HTTPException(
+            status_code=403,
+            detail="You are signed in, but you do not have permission to access this page.",
+        )
 
     # Self-demotion protection / last admin protection
     if previous_role in ("admin", "super_admin") and payload.role not in ("admin", "super_admin"):
         active_admins = count_active_admins_in_db()
         if active_admins <= 1 or user_id == admin_user.id:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
+                status_code=400,
                 detail="Cannot demote the final remaining administrator.",
             )
 
     ok = update_user_role_in_db(user_id, payload.role)
     if not ok:
-        pass
+        raise HTTPException(
+            status_code=500,
+            detail="The backend encountered an internal error.",
+        )
 
     # Record audit log event
     await record_audit_event(
@@ -826,6 +856,8 @@ async def update_user_role(
         "previous_role": previous_role,
         "message": f"User {user_id} role updated to {payload.role}",
     }
+
+
 
 
 @admin_router.get(

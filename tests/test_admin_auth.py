@@ -247,6 +247,107 @@ def test_admin_get_schemes_success(mock_verify):
     assert "privacy_note" in data
 
 
+def test_security_unsigned_jwt_rejected():
+    """Verify that unsigned tokens (verify_signature bypass attempt) are strictly rejected with 401."""
+    import jwt
+    from App.backend.auth.dependencies import verify_access_token, HTTPException
+    forged_payload = {
+        "sub": "attacker-id",
+        "email": "attacker@evil.com",
+        "role": "admin",
+        "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+    }
+    forged_token = jwt.encode(forged_payload, key="", algorithm="none")
+    try:
+        verify_access_token(forged_token)
+        assert False, "Should have raised 401 for unsigned token"
+    except HTTPException as exc:
+        assert exc.status_code == 401
+
+
+def test_security_invalid_issuer_rejected():
+    """Verify that tokens with untrusted issuer are rejected."""
+    from App.backend.auth.dependencies import verify_access_token, HTTPException
+    with patch("App.backend.auth.dependencies.SUPABASE_URL", "https://agrifusion.supabase.co"), \
+         patch("os.getenv") as mock_env:
+        def env_side_effect(key, default=None):
+            if key == "SUPABASE_URL":
+                return "https://agrifusion.supabase.co"
+            if key == "SUPABASE_JWT_SECRET":
+                return "test-secret-32-chars-long-12345"
+            return default
+        mock_env.side_effect = env_side_effect
+        
+        payload = {
+            "sub": "usr-1",
+            "iss": "https://attacker-domain.com/auth/v1",
+            "aud": "authenticated",
+            "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+        }
+        token = jwt.encode(payload, "test-secret-32-chars-long-12345", algorithm="HS256")
+        try:
+            verify_access_token(token)
+            assert False, "Should have raised 401 for invalid issuer"
+        except HTTPException as exc:
+            assert exc.status_code == 401
+
+
+def test_security_valid_hs256_token():
+    """Verify that valid HS256 tokens signed with configured secret are accepted."""
+    from App.backend.auth.dependencies import verify_access_token
+    with patch("App.backend.auth.dependencies.SUPABASE_URL", "https://agrifusion.supabase.co"), \
+         patch("os.getenv") as mock_env:
+        def env_side_effect(key, default=None):
+            if key == "SUPABASE_URL":
+                return "https://agrifusion.supabase.co"
+            if key == "SUPABASE_JWT_SECRET":
+                return "test-secret-32-chars-long-12345"
+            if key == "SUPABASE_JWT_AUDIENCE":
+                return "authenticated"
+            return default
+        mock_env.side_effect = env_side_effect
+
+        payload = {
+            "sub": "valid-usr-123",
+            "email": "farmer@agrifusion.com",
+            "iss": "https://agrifusion.supabase.co/auth/v1",
+            "aud": "authenticated",
+            "exp": int((datetime.now(timezone.utc) + timedelta(hours=1)).timestamp()),
+            "app_metadata": {"role": "farmer"},
+        }
+        token = jwt.encode(payload, "test-secret-32-chars-long-12345", algorithm="HS256")
+        claims = verify_access_token(token)
+        assert claims["sub"] == "valid-usr-123"
+        assert claims["email"] == "farmer@agrifusion.com"
+
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+def test_admin_users_pagination_schema(mock_verify):
+    """Verify GET /api/v1/admin/users returns documented pagination schema."""
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/users?page=1&page_size=10", headers=headers)
+    assert res.status_code == 200
+    data = res.json()
+    assert "items" in data
+    assert "page" in data
+    assert "page_size" in data
+    assert "total" in data
+    assert isinstance(data["items"], list)
+
+
+@patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
+@patch("App.backend.admin.router.fetch_all_users", side_effect=RuntimeError("Database Connection Lost"))
+def test_admin_users_db_outage_returns_500(mock_fetch, mock_verify):
+    """Verify DB outage returns 500 Internal Server Error, not an empty directory."""
+    token = generate_test_jwt(user_id="adm-1", role="admin")
+    headers = {"Authorization": f"Bearer {token}"}
+    res = client.get("/api/v1/admin/users", headers=headers)
+    assert res.status_code == 500
+    assert res.json()["detail"] == "The backend encountered an internal error."
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("Running AgriFusion Admin Auth Unit Tests...")
@@ -294,7 +395,23 @@ if __name__ == "__main__":
     test_admin_get_schemes_success()
     print(" [PASS] test_admin_get_schemes_success")
 
+    test_security_unsigned_jwt_rejected()
+    print(" [PASS] test_security_unsigned_jwt_rejected")
+
+    test_security_invalid_issuer_rejected()
+    print(" [PASS] test_security_invalid_issuer_rejected")
+
+    test_security_valid_hs256_token()
+    print(" [PASS] test_security_valid_hs256_token")
+
+    test_admin_users_pagination_schema()
+    print(" [PASS] test_admin_users_pagination_schema")
+
+    test_admin_users_db_outage_returns_500()
+    print(" [PASS] test_admin_users_db_outage_returns_500")
+
     print("=" * 60)
-    print("ALL ADMIN AUTH TESTS PASSED SUCCESSFULLY!")
+    print("ALL ADMIN AUTH & SECURITY TESTS PASSED SUCCESSFULLY!")
     print("=" * 60)
+
 

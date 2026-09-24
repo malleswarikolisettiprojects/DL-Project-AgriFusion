@@ -84,6 +84,14 @@ def init_db():
     conn.close()
 
 
+import logging
+import sqlite3
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Optional, Union
+
+logger = logging.getLogger(__name__)
+
 def fetch_all_users(
     page: int = 1,
     page_size: int = 25,
@@ -92,35 +100,41 @@ def fetch_all_users(
     status_filter: Optional[str] = None,
 ) -> dict:
     """
-    Fetch paginated user records from Supabase or SQLite fallback.
+    Fetch paginated user records from public.profiles (primary) or SQLite fallback.
     Returns safe user objects with passwords/tokens omitted.
+    Raises RuntimeError if configured database query fails.
     """
     init_db()
+    page = max(1, page)
+    page_size = min(max(1, page_size), 100)
     offset = (page - 1) * page_size
 
     supabase = _get_supabase()
     users_list = []
-    total = 0
 
     if supabase is not None:
         try:
-            # Query Supabase users table
-            query = supabase.table("users").select("*", count="exact")
+            # 1. Primary: Query Supabase public.profiles table
+            query = supabase.table("profiles").select("*", count="exact")
             if search:
-                query = query.or_(f"email.ilike.%{search}%,name.ilike.%{search}%")
+                query = query.or_(f"email.ilike.%{search}%,full_name.ilike.%{search}%")
             if role_filter:
                 query = query.eq("role", role_filter)
             if status_filter:
                 query = query.eq("status", status_filter)
 
-            res = query.order("id", desc=True).range(offset, offset + page_size - 1).execute()
+            res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
             if res.data is not None:
                 for u in res.data:
+                    full_name = u.get("full_name") or u.get("name")
+                    email_val = u.get("email")
+                    display_name = full_name or (email_val.split("@")[0] if email_val else "User")
                     users_list.append({
                         "id": str(u.get("id")),
-                        "email": u.get("email"),
-                        "name": u.get("name"),
-                        "role": u.get("role") or "user",
+                        "email": email_val,
+                        "name": display_name,
+                        "full_name": full_name,
+                        "role": u.get("role") or "farmer",
                         "status": u.get("status") or "active",
                         "created_at": u.get("created_at"),
                         "last_sign_in_at": u.get("last_sign_in_at"),
@@ -132,10 +146,42 @@ def fetch_all_users(
                     "page_size": page_size,
                     "total": total,
                 }
-        except Exception:
-            pass  # Fall through to SQLite
+        except Exception as exc:
+            # Fallback query on "users" table before declaring outage
+            try:
+                query = supabase.table("users").select("*", count="exact")
+                if search:
+                    query = query.or_(f"email.ilike.%{search}%,name.ilike.%{search}%")
+                if role_filter:
+                    query = query.eq("role", role_filter)
+                if status_filter:
+                    query = query.eq("status", status_filter)
 
-    # SQLite fallback
+                res = query.order("id", desc=True).range(offset, offset + page_size - 1).execute()
+                if res.data is not None:
+                    for u in res.data:
+                        users_list.append({
+                            "id": str(u.get("id")),
+                            "email": u.get("email"),
+                            "name": u.get("name") or u.get("full_name"),
+                            "full_name": u.get("full_name") or u.get("name"),
+                            "role": u.get("role") or "farmer",
+                            "status": u.get("status") or "active",
+                            "created_at": u.get("created_at"),
+                            "last_sign_in_at": u.get("last_sign_in_at"),
+                        })
+                    total = res.count if res.count is not None else len(users_list)
+                    return {
+                        "items": users_list,
+                        "page": page,
+                        "page_size": page_size,
+                        "total": total,
+                    }
+            except Exception as inner_exc:
+                logger.error("Supabase user directory DB query failure: %s", inner_exc)
+                raise RuntimeError("Database user directory query failed") from inner_exc
+
+    # SQLite fallback (only reached when Supabase is not configured)
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
@@ -170,7 +216,8 @@ def fetch_all_users(
                 "id": str(r["id"]),
                 "email": r["email"],
                 "name": r["name"],
-                "role": r["role"] if r["role"] else "user",
+                "full_name": r["name"],
+                "role": r["role"] if r["role"] else "farmer",
                 "status": r["status"] if r["status"] else "active",
                 "created_at": r["created_at"],
                 "last_sign_in_at": None,
@@ -181,29 +228,54 @@ def fetch_all_users(
             "page_size": page_size,
             "total": total,
         }
-    except Exception:
-        return {
-            "items": [],
-            "page": page,
-            "page_size": page_size,
-            "total": 0,
-        }
+    except Exception as exc:
+        logger.error("SQLite user directory query error: %s", exc)
+        raise RuntimeError("Database user directory query failed") from exc
 
 
 def get_user_by_id(user_id: str) -> Optional[dict]:
-    """Retrieve user record by ID without returning password hash."""
+    """Retrieve user record by ID from public.profiles (or fallback)."""
     init_db()
     supabase = _get_supabase()
     if supabase is not None:
         try:
-            res = supabase.table("users").select("id, name, email, role, status, created_at").eq("id", user_id).execute()
-            if res.data:
+            res = (
+                supabase.table("profiles")
+                .select("id, full_name, email, role, status, created_at")
+                .eq("id", user_id)
+                .execute()
+            )
+            if res.data and len(res.data) > 0:
+                u = res.data[0]
+                full_name = u.get("full_name") or u.get("name")
+                email_val = u.get("email")
+                return {
+                    "id": str(u.get("id")),
+                    "email": email_val,
+                    "name": full_name or (email_val.split("@")[0] if email_val else "User"),
+                    "full_name": full_name,
+                    "role": u.get("role") or "farmer",
+                    "status": u.get("status") or "active",
+                    "created_at": u.get("created_at"),
+                }
+        except Exception as exc:
+            logger.debug("Profiles fetch_by_id error: %s", exc)
+
+        try:
+            res = (
+                supabase.table("users")
+                .select("id, name, email, role, status, created_at")
+                .eq("id", user_id)
+                .execute()
+            )
+            if res.data and len(res.data) > 0:
                 u = res.data[0]
                 return {
                     "id": str(u.get("id")),
                     "email": u.get("email"),
                     "name": u.get("name"),
-                    "role": u.get("role") or "user",
+                    "full_name": u.get("name"),
+                    "role": u.get("role") or "farmer",
                     "status": u.get("status") or "active",
                     "created_at": u.get("created_at"),
                 }
@@ -213,7 +285,10 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, name, email, role, status, created_at FROM users WHERE id = ? OR email = ?", (user_id, user_id))
+        cursor.execute(
+            "SELECT id, name, email, role, status, created_at FROM users WHERE id = ? OR email = ?",
+            (user_id, user_id),
+        )
         row = cursor.fetchone()
         conn.close()
         if row:
@@ -221,7 +296,8 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
                 "id": str(row["id"]),
                 "email": row["email"],
                 "name": row["name"],
-                "role": row["role"] or "user",
+                "full_name": row["name"],
+                "role": row["role"] or "farmer",
                 "status": row["status"] or "active",
                 "created_at": row["created_at"],
             }
@@ -231,58 +307,127 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
 
 
 def update_user_status_in_db(user_id: str, new_status: str) -> bool:
-    """Perform soft status change for a user record."""
+    """Perform soft status change for user record in public.profiles and sync."""
     init_db()
     supabase = _get_supabase()
+    updated = False
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     if supabase is not None:
         try:
-            res = supabase.table("users").update({"status": new_status}).eq("id", user_id).execute()
-            if res.data:
-                return True
+            res = (
+                supabase.table("profiles")
+                .update({"status": new_status, "updated_at": now_iso})
+                .eq("id", user_id)
+                .execute()
+            )
+            if res.data and len(res.data) > 0:
+                updated = True
+        except Exception as exc:
+            logger.debug("Error updating profiles status: %s", exc)
+
+        try:
+            res2 = (
+                supabase.table("users")
+                .update({"status": new_status})
+                .eq("id", user_id)
+                .execute()
+            )
+            if res2.data and len(res2.data) > 0:
+                updated = True
         except Exception:
             pass
 
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET status = ? WHERE id = ? OR email = ?", (new_status, user_id, user_id))
+        cursor.execute(
+            "UPDATE users SET status = ? WHERE id = ? OR email = ?",
+            (new_status, user_id, user_id),
+        )
         conn.commit()
         conn.close()
-        return True
+        updated = True
     except Exception:
-        return False
+        pass
+
+    return updated
 
 
 def update_user_role_in_db(user_id: str, new_role: str) -> bool:
-    """Update user role in database store."""
+    """Update user role in public.profiles database store and sync."""
     init_db()
     supabase = _get_supabase()
+    updated = False
+    now_iso = datetime.now(timezone.utc).isoformat()
+
     if supabase is not None:
         try:
-            res = supabase.table("users").update({"role": new_role}).eq("id", user_id).execute()
-            if res.data:
-                return True
+            res = (
+                supabase.table("profiles")
+                .update({"role": new_role, "updated_at": now_iso})
+                .eq("id", user_id)
+                .execute()
+            )
+            if res.data and len(res.data) > 0:
+                updated = True
+        except Exception as exc:
+            logger.debug("Error updating profiles role: %s", exc)
+
+        try:
+            res2 = (
+                supabase.table("users")
+                .update({"role": new_role})
+                .eq("id", user_id)
+                .execute()
+            )
+            if res2.data and len(res2.data) > 0:
+                updated = True
         except Exception:
             pass
 
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("UPDATE users SET role = ? WHERE id = ? OR email = ?", (new_role, user_id, user_id))
+        cursor.execute(
+            "UPDATE users SET role = ? WHERE id = ? OR email = ?",
+            (new_role, user_id, user_id),
+        )
         conn.commit()
         conn.close()
-        return True
+        updated = True
     except Exception:
-        return False
+        pass
+
+    return updated
 
 
 def count_active_admins_in_db() -> int:
-    """Count how many users currently have active admin permissions."""
+    """Count how many users currently have active admin permissions in public.profiles."""
     init_db()
     supabase = _get_supabase()
     if supabase is not None:
         try:
-            res = supabase.table("users").select("id", count="exact").in_("role", ["admin", "super_admin", "Admin", "Super Admin"]).eq("status", "active").execute()
+            res = (
+                supabase.table("profiles")
+                .select("id", count="exact")
+                .in_("role", ["admin", "super_admin", "Admin", "Super Admin"])
+                .eq("status", "active")
+                .execute()
+            )
+            if res.count is not None and res.count > 0:
+                return res.count
+        except Exception:
+            pass
+
+        try:
+            res = (
+                supabase.table("users")
+                .select("id", count="exact")
+                .in_("role", ["admin", "super_admin", "Admin", "Super Admin"])
+                .eq("status", "active")
+                .execute()
+            )
             if res.count is not None:
                 return res.count
         except Exception:
@@ -291,12 +436,15 @@ def count_active_admins_in_db() -> int:
     try:
         conn = _get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM users WHERE role IN ('admin', 'super_admin', 'Admin', 'Super Admin') AND (status IS NULL OR status = 'active')")
+        cursor.execute(
+            "SELECT COUNT(*) FROM users WHERE role IN ('admin', 'super_admin', 'Admin', 'Super Admin') AND (status IS NULL OR status = 'active')"
+        )
         cnt = cursor.fetchone()[0]
         conn.close()
         return cnt
     except Exception:
         return 1
+
 
 
 

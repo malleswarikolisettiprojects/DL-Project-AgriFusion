@@ -119,14 +119,50 @@ def fetch_user_profile(user_id: str) -> dict[str, Any] | None:
 
 def verify_access_token(token: str) -> dict[str, Any]:
     """
-    Multi-stage verification of Supabase access token:
-    1. HMAC HS256 decode using local Supabase secrets.
-    2. Supabase Auth API verification (GET /auth/v1/user).
-    3. PyJWKClient for RS256/ES256.
-    4. Unverified timestamp & subject validation.
+    Cryptographic verification of Supabase access token.
+    Fails closed if signature, issuer, audience, subject, or expiration fails.
+    Never accepts unverified tokens or signature-bypass fallback.
     """
     if not token or not isinstance(token, str):
         raise authentication_error("Your session has expired. Please sign in again.")
+
+    base_url = os.getenv("SUPABASE_URL") or SUPABASE_URL
+    expected_iss_prefix = base_url.rstrip("/") if base_url else None
+
+
+    def _validate_claims_metadata(claims: dict[str, Any]) -> dict[str, Any]:
+        # Validate subject (sub)
+        sub = claims.get("sub")
+        if not sub or not isinstance(sub, str):
+            raise authentication_error("Your session has expired. Please sign in again.")
+
+        # Validate expiry (exp)
+        exp = claims.get("exp")
+        if exp is not None:
+            try:
+                exp_val = float(exp)
+                if exp_val < time.time():
+                    raise authentication_error("Your session has expired. Please sign in again.")
+            except (ValueError, TypeError):
+                raise authentication_error("Your session has expired. Please sign in again.")
+
+        # Validate audience (aud)
+        aud = claims.get("aud")
+        if aud is not None:
+            if isinstance(aud, str):
+                if aud not in ("authenticated", SUPABASE_JWT_AUDIENCE):
+                    raise authentication_error("Your session has expired. Please sign in again.")
+            elif isinstance(aud, list):
+                if not any(a in ("authenticated", SUPABASE_JWT_AUDIENCE) for a in aud):
+                    raise authentication_error("Your session has expired. Please sign in again.")
+
+        # Validate issuer (iss)
+        iss = claims.get("iss")
+        if iss and isinstance(iss, str) and expected_iss_prefix:
+            if not iss.startswith(expected_iss_prefix):
+                raise authentication_error("Your session has expired. Please sign in again.")
+
+        return claims
 
     # 1. HS256 secret candidates
     candidate_secrets = []
@@ -150,14 +186,13 @@ def verify_access_token(token: str) -> dict[str, Any]:
                 audience=SUPABASE_JWT_AUDIENCE,
                 options={"require": ["exp", "sub"], "verify_aud": False},
             )
-            return claims
+            return _validate_claims_metadata(claims)
         except jwt.ExpiredSignatureError as exc:
             raise authentication_error("Your session has expired. Please sign in again.") from exc
         except jwt.InvalidTokenError:
             continue
 
     # 2. Direct verification via Supabase Auth API GET /auth/v1/user
-    base_url = SUPABASE_URL or os.getenv("SUPABASE_URL")
     if base_url:
         anon_key = os.getenv("SUPABASE_ANON_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY")
         try:
@@ -170,8 +205,8 @@ def verify_access_token(token: str) -> dict[str, Any]:
                 if resp.status_code == 200:
                     data = resp.json()
                     user_id = data.get("id")
-                    if user_id:
-                        return {
+                    if user_id and isinstance(user_id, str):
+                        claims = {
                             "sub": user_id,
                             "email": data.get("email"),
                             "aud": data.get("aud", "authenticated"),
@@ -179,6 +214,7 @@ def verify_access_token(token: str) -> dict[str, Any]:
                             "app_metadata": data.get("app_metadata", {}),
                             "user_metadata": data.get("user_metadata", {}),
                         }
+                        return _validate_claims_metadata(claims)
                 elif resp.status_code == 401:
                     raise authentication_error("Your session has expired. Please sign in again.")
         except HTTPException:
@@ -198,7 +234,7 @@ def verify_access_token(token: str) -> dict[str, Any]:
                 audience=SUPABASE_JWT_AUDIENCE,
                 options={"require": ["exp", "sub"], "verify_aud": False},
             )
-            return claims
+            return _validate_claims_metadata(claims)
         except jwt.ExpiredSignatureError as exc:
             raise authentication_error("Your session has expired. Please sign in again.") from exc
         except jwt.InvalidTokenError:
@@ -206,21 +242,9 @@ def verify_access_token(token: str) -> dict[str, Any]:
         except Exception:
             pass
 
-    # 4. Fallback check for unverified payload exp timestamp
-    try:
-        unverified = jwt.decode(token, options={"verify_signature": False})
-        exp = unverified.get("exp")
-        if exp and exp < time.time():
-            raise authentication_error("Your session has expired. Please sign in again.")
-        sub = unverified.get("sub")
-        if sub and isinstance(sub, str):
-            return unverified
-    except jwt.ExpiredSignatureError as exc:
-        raise authentication_error("Your session has expired. Please sign in again.") from exc
-    except Exception:
-        pass
-
+    # No unverified fallback: fail closed
     raise authentication_error("Your session has expired. Please sign in again.")
+
 
 
 async def get_current_user(
