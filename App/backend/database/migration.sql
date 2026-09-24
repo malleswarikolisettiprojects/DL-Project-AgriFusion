@@ -46,6 +46,36 @@ BEGIN
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='farmer_feedback') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='farmer_feedback' AND column_name='user_id') THEN
         ALTER TABLE public.farmer_feedback ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
     END IF;
+
+    -- schemes columns reconciliation
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='schemes') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemes' AND column_name='verification_status') THEN
+            ALTER TABLE public.schemes ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'pending_review';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='schemes' AND column_name='current_status') THEN
+            ALTER TABLE public.schemes ADD COLUMN current_status TEXT NOT NULL DEFAULT 'active';
+        END IF;
+    END IF;
+
+    -- knowledge_sources columns reconciliation
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='knowledge_sources') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='knowledge_sources' AND column_name='verification_status') THEN
+            ALTER TABLE public.knowledge_sources ADD COLUMN verification_status TEXT NOT NULL DEFAULT 'pending_review';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='knowledge_sources' AND column_name='approval_status') THEN
+            ALTER TABLE public.knowledge_sources ADD COLUMN approval_status TEXT NOT NULL DEFAULT 'pending';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='knowledge_sources' AND column_name='url') THEN
+            ALTER TABLE public.knowledge_sources ADD COLUMN url TEXT;
+        END IF;
+    END IF;
+
+    -- saved_searches query column reconciliation
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='saved_searches') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_searches' AND column_name='query') THEN
+            ALTER TABLE public.saved_searches ADD COLUMN query TEXT;
+        END IF;
+    END IF;
 END $$;
 
 -- -----------------------------------------------------------------------------
