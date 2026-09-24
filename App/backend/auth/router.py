@@ -1,8 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import JSONResponse
+from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 
 from App.backend.auth.dependencies import (
     CurrentUser,
+    bearer_scheme,
     get_current_user,
     require_admin,
 )
@@ -34,7 +37,7 @@ async def login(payload: LoginRequest):
             })
             if res.user and res.session:
                 app_meta = res.user.app_metadata or {}
-                role = app_meta.get("role", "user")
+                role = app_meta.get("role", "farmer")
                 return {
                     "authenticated": True,
                     "access_token": res.session.access_token,
@@ -62,7 +65,7 @@ async def login(payload: LoginRequest):
         "message": "Authenticated locally. Use Supabase Auth for JWT Bearer tokens.",
         "user_id": str(user.get("id")),
         "email": user.get("email"),
-        "role": user.get("role", "user"),
+        "role": user.get("role", "farmer"),
     }
 
 
@@ -84,17 +87,65 @@ async def get_me(
         "user_id": current_user.id,
         "email": current_user.email,
         "role": current_user.role,
+        "status": current_user.status,
     }
 
 
 @router.get("/admin-check")
 async def admin_check(
-    admin_user: CurrentUser = Depends(require_admin),
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
 ):
-    return {
-        "authenticated": True,
-        "admin": True,
-        "user_id": admin_user.id,
-        "role": admin_user.role,
-    }
+    """
+    Check if the requesting user is authenticated and authorized as an administrator.
+    HTTP 200: Valid administrator
+    HTTP 403: Valid farmer (authenticated but not authorized)
+    HTTP 401: Unauthenticated or missing/invalid token
+    """
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={
+                "authenticated": False,
+                "authorized": False,
+                "message": "Authentication required.",
+            },
+        )
+
+    try:
+        user = await get_current_user(credentials)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_401_UNAUTHORIZED:
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={
+                    "authenticated": False,
+                    "authorized": False,
+                    "message": "Authentication required.",
+                },
+            )
+        raise exc
+
+    is_admin = user.role in ("admin", "super_admin")
+
+    if is_admin:
+        return {
+            "authenticated": True,
+            "authorized": True,
+            "user_id": user.id,
+            "role": user.role if user.role in ("admin", "super_admin") else "admin",
+            "status": user.status,
+        }
+    else:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={
+                "authenticated": True,
+                "authorized": False,
+                "user_id": user.id,
+                "role": user.role,
+                "status": user.status,
+                "message": "Administrator access required.",
+            },
+        )
+
 

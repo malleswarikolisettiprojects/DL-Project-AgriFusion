@@ -54,6 +54,7 @@ def mock_farmer_1():
         user_id="11111111-1111-1111-1111-111111111111",
         email="farmer1@agrifusion.test",
         role="farmer",
+        status="active",
         claims={"sub": "11111111-1111-1111-1111-111111111111", "app_metadata": {"role": "farmer"}},
     )
 
@@ -62,6 +63,7 @@ def mock_farmer_2():
         user_id="22222222-2222-2222-2222-222222222222",
         email="farmer2@agrifusion.test",
         role="farmer",
+        status="active",
         claims={"sub": "22222222-2222-2222-2222-222222222222", "app_metadata": {"role": "farmer"}},
     )
 
@@ -70,8 +72,10 @@ def mock_admin_user():
         user_id="99999999-9999-9999-9999-999999999999",
         email="admin@agrifusion.test",
         role="admin",
+        status="active",
         claims={"sub": "99999999-9999-9999-9999-999999999999", "app_metadata": {"role": "admin"}},
     )
+
 
 
 # -----------------------------------------------------------------------------
