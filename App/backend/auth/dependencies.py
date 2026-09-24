@@ -288,7 +288,7 @@ async def get_current_user(
         else:
             role = "admin"
     else:
-        role = role if role in ("farmer", "admin", "super_admin") else "farmer"
+        role = role if role in ("farmer", "user", "admin", "super_admin", "agronomist", "auditor", "editor") else "farmer"
 
     return CurrentUser(
         user_id=user_id,
