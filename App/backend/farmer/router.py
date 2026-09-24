@@ -150,7 +150,14 @@ async def patch_profile(
 async def list_farms(current_user: CurrentUser = Depends(get_current_user)):
     """List all registered farms belonging to current farmer from Supabase."""
     farms = get_user_farms(current_user.id)
-    return {"status": "success", "user_id": current_user.id, "count": len(farms), "items": farms}
+    return {
+        "status": "success",
+        "user_id": current_user.id,
+        "count": len(farms),
+        "total": len(farms),
+        "items": farms,
+        "farms": farms,
+    }
 
 
 @farmer_router.post("/farms", status_code=201)
