@@ -409,6 +409,7 @@ class AddFeedbackReviewNoteRequest(BaseModel):
 
 
 @admin_router.get("/overview")
+@admin_router.get("/dashboard")
 async def admin_overview(
     admin_user: CurrentUser = Depends(require_admin),
 ):
@@ -558,6 +559,30 @@ async def get_admin_users(
         status_filter=status,
     )
     return res
+
+
+@admin_router.get("/users/{user_id}", response_model=AdminUserResponse)
+async def get_admin_user_detail(
+    user_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Retrieve detailed user attributes for a single user by ID."""
+    user = get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User '{user_id}' not found.")
+    return user
+
+
+@admin_router.get("/diagnostics")
+async def get_admin_diagnostics(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(25, ge=1, le=100),
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Retrieve paginated crop health diagnostic reports for administrative review."""
+    from App.backend.database.farmer_db import get_all_diagnostics_for_admin
+    data = get_all_diagnostics_for_admin(page=page, page_size=page_size)
+    return {"status": "success", "admin_user_id": admin_user.id, "data": data}
 
 
 @admin_router.patch("/users/{user_id}/status")
@@ -1044,6 +1069,8 @@ async def get_admin_knowledge_source_detail(
 
 
 @admin_router.post("/sources/register", status_code=201)
+@admin_router.post("/sources", status_code=201)
+@admin_router.post("/knowledge-sources", status_code=201)
 async def register_admin_knowledge_source(
     payload: RegisterSourceRequest,
     admin_user: CurrentUser = Depends(require_admin),
@@ -1151,6 +1178,39 @@ async def update_admin_knowledge_source(
     )
 
     return result
+
+
+class SourceApprovalRequest(BaseModel):
+    approval_status: Literal["approved", "rejected", "pending_review"]
+    comments: Optional[str] = None
+
+
+@admin_router.patch("/sources/{source_id}/approval")
+@admin_router.patch("/knowledge-sources/{source_id}/approval")
+async def update_knowledge_source_approval(
+    source_id: str,
+    payload: SourceApprovalRequest,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Update approval status for a knowledge source."""
+    verification_status = "verified" if payload.approval_status == "approved" else ("rejected" if payload.approval_status == "rejected" else "pending_review")
+    success, result = update_knowledge_source_metadata(
+        source_id=source_id,
+        admin_user_id=admin_user.id,
+        verification_status=verification_status,
+        verification_notes=payload.comments,
+    )
+    if not success:
+        raise HTTPException(status_code=422, detail=str(result))
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="knowledge_source_approval_updated",
+        target_type="knowledge_source",
+        target_id=source_id,
+        safe_metadata={"approval_status": payload.approval_status},
+    )
+    return {"status": "success", "source_id": source_id, "approval_status": payload.approval_status}
 
 
 @admin_router.post("/sources/{source_id}/reindex")
@@ -1362,6 +1422,7 @@ async def get_admin_government_scheme_detail(
 
 
 @admin_router.post("/schemes/register", status_code=201)
+@admin_router.post("/schemes", status_code=201)
 async def register_admin_government_scheme(
     payload: RegisterSchemeRequest,
     admin_user: CurrentUser = Depends(require_admin),
@@ -1532,6 +1593,37 @@ async def trigger_recheck_scheme(
     )
 
     return result
+
+
+@admin_router.delete("/schemes/{scheme_id}")
+async def delete_admin_government_scheme(
+    scheme_id: str,
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """Delete a government scheme record by ID."""
+    existing = get_government_scheme_detail(scheme_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail=f"Government scheme '{scheme_id}' not found.")
+
+    if supabase is not None:
+        try:
+            supabase.table("schemes").delete().eq("id", scheme_id).execute()
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Failed to delete scheme: {e}")
+
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="scheme_deleted",
+        target_type="government_scheme",
+        target_id=scheme_id,
+        safe_metadata={"scheme_name": existing.get("scheme_name")},
+    )
+
+    return {
+        "status": "success",
+        "scheme_id": scheme_id,
+        "message": f"Government scheme '{scheme_id}' deleted successfully.",
+    }
 
 
 

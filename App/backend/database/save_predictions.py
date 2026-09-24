@@ -1,4 +1,23 @@
+from datetime import datetime, timezone
 from App.backend.database.database import supabase
+
+
+def _save_to_prediction_records(user_id, prediction_type, request_payload, result_payload):
+    if supabase is None:
+        return
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        supabase.table("prediction_records").insert({
+            "user_id": user_id,
+            "prediction_type": prediction_type,
+            "request_payload": request_payload or {},
+            "result_payload": result_payload or {},
+            "status": "completed",
+            "created_at": now,
+            "completed_at": now,
+        }).execute()
+    except Exception as e:
+        print(f"Warning: Could not save to prediction_records: {e}")
 
 
 # ============================================================
@@ -7,6 +26,12 @@ from App.backend.database.database import supabase
 
 def save_crop_prediction(data):
     try:
+        _save_to_prediction_records(
+            user_id=data.get("user_id"),
+            prediction_type="crop_recommendation",
+            request_payload={"state": data.get("state"), "district": data.get("district"), "season": data.get("season")},
+            result_payload={"predicted_crop": data.get("predicted_crop"), "confidence": data.get("confidence")},
+        )
         response = (
             supabase
             .table("crop_prediction")
@@ -44,6 +69,12 @@ def save_crop_prediction(data):
 
 def save_irrigation_prediction(data):
     try:
+        _save_to_prediction_records(
+            user_id=data.get("user_id"),
+            prediction_type="irrigation_schedule",
+            request_payload={"crop": data.get("crop"), "state": data.get("state"), "soil_type": data.get("soil_type")},
+            result_payload={"predicted_irrigation": data.get("predicted_irrigation")},
+        )
         response = (
             supabase
             .table("irrigation_prediction")
@@ -88,6 +119,12 @@ def save_irrigation_prediction(data):
 
 def save_climate_prediction(data):
     try:
+        _save_to_prediction_records(
+            user_id=data.get("user_id"),
+            prediction_type="climate_risk",
+            request_payload={"city": data.get("city"), "state": data.get("state"), "crop": data.get("crop")},
+            result_payload={"predicted_climate_risk": data.get("predicted_climate_risk")},
+        )
         response = (
             supabase
             .table("climate_prediction")
@@ -136,6 +173,12 @@ def save_climate_prediction(data):
 
 def save_yield_prediction(data):
     try:
+        _save_to_prediction_records(
+            user_id=data.get("user_id"),
+            prediction_type="yield_forecast",
+            request_payload={"state": data.get("state"), "district": data.get("district"), "crop": data.get("crop")},
+            result_payload={"predicted_yield": data.get("predicted_yield")},
+        )
         response = (
             supabase
             .table("yield_prediction")
@@ -181,6 +224,12 @@ def save_yield_prediction(data):
 
 def save_market_prediction(data):
     try:
+        _save_to_prediction_records(
+            user_id=data.get("user_id"),
+            prediction_type="market_price",
+            request_payload={"commodity": data.get("commodity"), "state": data.get("state"), "district": data.get("district")},
+            result_payload={"predicted_market_price": data.get("predicted_market_price")},
+        )
         response = (
             supabase
             .table("market_prediction")
@@ -208,11 +257,19 @@ def save_market_prediction(data):
 # ============================================================
 
 def save_disease_prediction(data):
-    """
-    Save disease, pest or nutrient deficiency detection result.
-    Only stores the prediction outcome — NOT remedies, RAG output, or scheme recommendations.
-    """
     try:
+        if supabase is not None:
+            now = datetime.now(timezone.utc).isoformat()
+            supabase.table("diagnostic_reports").insert({
+                "user_id": data.get("user_id"),
+                "crop": data.get("crop") or "Unknown",
+                "image_storage_path": data.get("annotated_image_url"),
+                "detection_results": data.get("all_detections") or {},
+                "primary_diagnosis": data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient") or "Diagnosed",
+                "confidence": data.get("top_disease_confidence") or 0.9,
+                "created_at": now,
+            }).execute()
+
         response = (
             supabase
             .table("disease_prediction")
@@ -226,7 +283,7 @@ def save_disease_prediction(data):
                 "top_nutrient":            data.get("top_nutrient"),
                 "top_nutrient_confidence": data.get("top_nutrient_confidence"),
                 "annotated_image_url":     data.get("annotated_image_url"),
-                "all_detections":          data.get("all_detections"),   # JSON list of {label, confidence}
+                "all_detections":          data.get("all_detections"),
                 "custom_crop_notice":      data.get("custom_crop_notice"),
             })
             .execute()
@@ -234,4 +291,4 @@ def save_disease_prediction(data):
         return response
     except Exception as e:
         print(f"Warning: Could not save disease prediction to Supabase: {e}")
-        return None
+        return None

@@ -63,6 +63,11 @@ from App.backend.agronomy_rag import query_agronomy_agent, load_local_agronomy_d
 from App.backend.settings import FRONTEND_URL, get_config_status
 from App.backend.auth.router import router as auth_router
 from App.backend.admin.router import admin_router
+from App.backend.farmer.router import farmer_router
+
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(farmer_router)
 from App.backend.auth.dependencies import (
     CurrentUser,
     get_current_user,
@@ -118,8 +123,7 @@ def startup_db_init():
     except Exception as err:
         logger.warning(f"Error during startup DB initialization: {err}")
 
-app.include_router(auth_router)
-app.include_router(admin_router)
+
 
 
 def make_error_response(
