@@ -61,7 +61,7 @@ def test_profiles_optional_fields():
     mock_res.count = 2
     mock_range.execute.return_value = mock_res
 
-    with patch("App.backend.database.auth_db._get_supabase", return_value=mock_supabase):
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
         res = fetch_all_users(page=1, page_size=10)
         assert res["total"] == 2
         assert len(res["items"]) == 2
@@ -116,7 +116,7 @@ def test_pagination_and_total_count_consistency():
 
     mock_order.range.side_effect = range_side_effect
 
-    with patch("App.backend.database.auth_db._get_supabase", return_value=mock_supabase):
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
         res1 = fetch_all_users(page=1, page_size=2)
         res2 = fetch_all_users(page=2, page_size=2)
 
@@ -174,7 +174,7 @@ def test_missing_profiles_backfill_from_auth_users():
     mock_res.count = 1
     mock_range.execute.return_value = mock_res
 
-    with patch("App.backend.database.auth_db._get_supabase", return_value=mock_supabase):
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
         res = fetch_all_users(page=1, page_size=10)
 
         # Check upsert was called with backfilled dict
@@ -183,7 +183,7 @@ def test_missing_profiles_backfill_from_auth_users():
         assert len(upsert_arg) == 1
         assert upsert_arg[0]["id"] == "auth-uuid-999"
         assert upsert_arg[0]["email"] == "newauth@test.com"
-        assert upsert_arg[0]["role"] == "agronomist"
+        assert upsert_arg[0]["role"] == "farmer"
 
         assert res["total"] == 1
         assert res["items"][0]["id"] == "auth-uuid-999"
@@ -196,7 +196,7 @@ def test_database_error_fails_closed_in_production():
     mock_supabase.table.return_value = mock_profiles_table
     mock_profiles_table.select.side_effect = Exception("Supabase connection error")
 
-    with patch("App.backend.database.auth_db._get_supabase", return_value=mock_supabase):
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
         failed = False
         try:
             fetch_all_users(page=1, page_size=10)
@@ -225,7 +225,7 @@ def test_role_and_status_update_propagation_to_auth_reads():
     mock_update_role.eq.return_value = mock_eq_update_role
     mock_eq_update_role.execute.return_value = MagicMock(data=[{"id": "usr-role-1", "role": "editor"}])
 
-    with patch("App.backend.database.auth_db._get_supabase", return_value=mock_supabase):
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
         ok = update_user_role_in_db("usr-role-1", "editor")
         assert ok is True
 
@@ -236,7 +236,7 @@ def test_role_and_status_update_propagation_to_auth_reads():
     mock_update_status.eq.return_value = mock_eq_update_status
     mock_eq_update_status.execute.return_value = MagicMock(data=[{"id": "usr-role-1", "status": "suspended"}])
 
-    with patch("App.backend.database.auth_db._get_supabase", return_value=mock_supabase):
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
         ok_status = update_user_status_in_db("usr-role-1", "suspended")
         assert ok_status is True
 

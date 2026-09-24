@@ -31,9 +31,15 @@ DATA_DIR = BASE_DIR / "Data"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 DB_PATH = DATA_DIR / "users.db"
 
-from App.backend.settings import ADMIN_USERNAME, ADMIN_PASSWORD, create_supabase_client
+from App.backend.settings import (
+    ADMIN_USERNAME,
+    ADMIN_PASSWORD,
+    create_supabase_client,
+    create_supabase_admin_client,
+)
 
 _supabase = None  # initialised lazily to avoid crashing at import time
+_supabase_admin = None
 
 
 def _get_supabase():
@@ -41,6 +47,13 @@ def _get_supabase():
     if _supabase is None:
         _supabase = create_supabase_client()
     return _supabase
+
+
+def _get_supabase_admin():
+    global _supabase_admin
+    if _supabase_admin is None:
+        _supabase_admin = create_supabase_admin_client() or _get_supabase()
+    return _supabase_admin
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -109,7 +122,7 @@ def fetch_all_users(
     page_size = min(max(1, page_size), 100)
     offset = (page - 1) * page_size
 
-    supabase = _get_supabase()
+    supabase = _get_supabase_admin()
     users_list = []
 
     if supabase is not None:
@@ -152,11 +165,6 @@ def fetch_all_users(
                                     or (au.get("user_metadata") if isinstance(au, dict) else {})
                                     or {}
                                 )
-                                app_meta = (
-                                    getattr(au, "app_metadata", None)
-                                    or (au.get("app_metadata") if isinstance(au, dict) else {})
-                                    or {}
-                                )
                                 full_name = user_meta.get("full_name") or user_meta.get("name")
                                 created_at_val = getattr(au, "created_at", None) or (
                                     au.get("created_at") if isinstance(au, dict) else None
@@ -164,13 +172,12 @@ def fetch_all_users(
                                 last_sign_in_val = getattr(au, "last_sign_in_at", None) or (
                                     au.get("last_sign_in_at") if isinstance(au, dict) else None
                                 )
-                                role_val = app_meta.get("role") or user_meta.get("role") or "farmer"
 
                                 to_upsert.append({
                                     "id": au_id,
                                     "email": email_val,
                                     "full_name": full_name,
-                                    "role": role_val,
+                                    "role": "farmer", # Security contract: ALWAYS default missing profiles to farmer role
                                     "status": "active",
                                     "created_at": created_at_val,
                                     "last_sign_in_at": last_sign_in_val,
@@ -178,7 +185,7 @@ def fetch_all_users(
                         if to_upsert:
                             supabase.table("profiles").upsert(to_upsert).execute()
             except Exception as backfill_exc:
-                logger.debug("Supabase auth user profile backfill warning: %s", backfill_exc)
+                logger.warning("Supabase auth user profile backfill warning: %s", backfill_exc)
 
             # 2. Query public.profiles canonical source
             query = supabase.table("profiles").select("*", count="exact")
@@ -216,6 +223,11 @@ def fetch_all_users(
         except Exception as exc:
             logger.error("Supabase user directory DB query failure: %s", exc)
             raise RuntimeError("Database user directory query failed") from exc
+
+    # Fail closed if Supabase configuration is expected but admin client unavailable
+    from App.backend.settings import SUPABASE_URL
+    if SUPABASE_URL:
+        raise RuntimeError("Database user directory query failed: Server-side Supabase admin client unavailable.")
 
     # SQLite fallback (only reached when Supabase is NOT configured)
     try:
@@ -272,7 +284,7 @@ def fetch_all_users(
 def get_user_by_id(user_id: str) -> Optional[dict]:
     """Retrieve user record by ID from public.profiles (canonical)."""
     init_db()
-    supabase = _get_supabase()
+    supabase = _get_supabase_admin()
     if supabase is not None:
         try:
             res = (
@@ -327,7 +339,7 @@ def get_user_by_id(user_id: str) -> Optional[dict]:
 def update_user_status_in_db(user_id: str, new_status: str) -> bool:
     """Perform soft status change for user record in public.profiles."""
     init_db()
-    supabase = _get_supabase()
+    supabase = _get_supabase_admin()
     updated = False
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -363,7 +375,7 @@ def update_user_status_in_db(user_id: str, new_status: str) -> bool:
 def update_user_role_in_db(user_id: str, new_role: str) -> bool:
     """Update user role in public.profiles database store."""
     init_db()
-    supabase = _get_supabase()
+    supabase = _get_supabase_admin()
     updated = False
     now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -399,7 +411,7 @@ def update_user_role_in_db(user_id: str, new_role: str) -> bool:
 def count_active_admins_in_db() -> int:
     """Count how many users currently have active admin permissions in public.profiles."""
     init_db()
-    supabase = _get_supabase()
+    supabase = _get_supabase_admin()
     if supabase is not None:
         try:
             res = (

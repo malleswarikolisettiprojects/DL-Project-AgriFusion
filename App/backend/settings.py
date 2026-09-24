@@ -65,13 +65,15 @@ def _get_env(key: str) -> Optional[str]:
 
 # Database
 SUPABASE_URL: Optional[str] = _get_env("SUPABASE_URL")
-SUPABASE_KEY: Optional[str] = (
-    _get_env("SUPABASE_KEY")
-    or _get_env("SUPABASE_SERVICE_ROLE_KEY")
-    or _get_env("SUPABASE_ANON_KEY")
-)
 SUPABASE_SERVICE_ROLE_KEY: Optional[str] = _get_env("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_ANON_KEY: Optional[str] = _get_env("SUPABASE_ANON_KEY")
+
+# Standard key defaults to SERVICE_ROLE_KEY if set, otherwise ANON_KEY or SUPABASE_KEY
+SUPABASE_KEY: Optional[str] = (
+    SUPABASE_SERVICE_ROLE_KEY
+    or _get_env("SUPABASE_KEY")
+    or SUPABASE_ANON_KEY
+)
 
 
 # External AI providers
@@ -99,22 +101,40 @@ SOILGRIDS_BASE_URL: str = (
 SUPABASE_BUCKET: str = _get_env("SUPABASE_BUCKET") or "crop-images"
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Supabase client factory — returns None if not configured; never crashes
+# Supabase client factories — returns None if not configured; never crashes
 # ──────────────────────────────────────────────────────────────────────────────
 def create_supabase_client():
     """
-    Build and return a Supabase client, or None if credentials are absent.
+    Build and return standard Supabase client for general requests.
     Never logs or exposes credential values.
     """
-    if not SUPABASE_URL or not SUPABASE_KEY:
+    key = SUPABASE_ANON_KEY or SUPABASE_KEY
+    if not SUPABASE_URL or not key:
         return None
     try:
         from supabase import create_client
-        client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        client = create_client(SUPABASE_URL, key)
         return client
     except Exception as exc:
-        # Log only that initialization failed, never the values
         print(f"[settings] Supabase client initialization failed: {type(exc).__name__}")
+        return None
+
+
+def create_supabase_admin_client():
+    """
+    Build and return privileged server-only Supabase Admin client (using SUPABASE_SERVICE_ROLE_KEY).
+    Used exclusively on the backend for Auth Admin operations and admin directory queries.
+    Never exposed to frontend/browser clients.
+    """
+    admin_key = SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY
+    if not SUPABASE_URL or not admin_key:
+        return None
+    try:
+        from supabase import create_client
+        client = create_client(SUPABASE_URL, admin_key)
+        return client
+    except Exception as exc:
+        print(f"[settings] Supabase admin client initialization failed: {type(exc).__name__}")
         return None
 
 
@@ -128,6 +148,7 @@ def get_config_status() -> dict:
     """
     return {
         "supabase_configured": bool(SUPABASE_URL and SUPABASE_KEY),
+        "supabase_admin_configured": bool(SUPABASE_URL and (SUPABASE_SERVICE_ROLE_KEY or SUPABASE_KEY)),
         "roboflow_configured": bool(ROBOFLOW_API_KEY),
         "hf_token_configured": bool(HF_TOKEN),
         "admin_configured": bool(ADMIN_USERNAME and ADMIN_PASSWORD),
