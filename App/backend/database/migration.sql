@@ -11,8 +11,16 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 -- -----------------------------------------------------------------------------
 DO $$ 
 BEGIN 
-    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='farms') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='farms' AND column_name='user_id') THEN
-        ALTER TABLE public.farms ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='farms') THEN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='farms' AND column_name='user_id') THEN
+            ALTER TABLE public.farms ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='farms' AND column_name='crop') THEN
+            ALTER TABLE public.farms ADD COLUMN crop TEXT;
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='farms' AND column_name='irrigation_type') THEN
+            ALTER TABLE public.farms ADD COLUMN irrigation_type TEXT;
+        END IF;
     END IF;
 
     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='prediction_records') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='prediction_records' AND column_name='user_id') THEN
@@ -154,6 +162,8 @@ CREATE TABLE IF NOT EXISTS public.farms (
     land_area NUMERIC(10, 2),
     land_area_unit TEXT DEFAULT 'acres',
     soil_type TEXT,
+    crop TEXT,
+    irrigation_type TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

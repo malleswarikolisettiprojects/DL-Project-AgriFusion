@@ -61,6 +61,8 @@ class FarmCreateRequest(BaseModel):
     land_area: Optional[float] = None
     land_area_unit: Optional[str] = "acres"
     soil_type: Optional[str] = None
+    crop: Optional[str] = Field(None, example="Rice")
+    irrigation_type: Optional[str] = Field(None, example="Drip")
 
 
 class FarmUpdateRequest(BaseModel):
@@ -73,6 +75,8 @@ class FarmUpdateRequest(BaseModel):
     land_area: Optional[float] = None
     land_area_unit: Optional[str] = None
     soil_type: Optional[str] = None
+    crop: Optional[str] = None
+    irrigation_type: Optional[str] = None
 
 
 class ImportLegacyFarmsRequest(BaseModel):
@@ -102,6 +106,7 @@ class PreferencesUpdateRequest(BaseModel):
 # 1. Farmer Profile Endpoints
 # -----------------------------------------------------------------------------
 @farmer_router.get("/profile")
+@farmer_router.get("/farmer/profile")
 async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
     """Fetch profile of current authenticated farmer."""
     profile = get_user_profile(current_user.id)
@@ -118,6 +123,7 @@ async def get_profile(current_user: CurrentUser = Depends(get_current_user)):
 
 
 @farmer_router.patch("/profile")
+@farmer_router.patch("/farmer/profile")
 async def patch_profile(
     payload: ProfileUpdateRequest,
     current_user: CurrentUser = Depends(get_current_user),
@@ -140,6 +146,7 @@ async def patch_profile(
 # 2. Farm Profiles Endpoints
 # -----------------------------------------------------------------------------
 @farmer_router.get("/farms")
+@farmer_router.get("/farmer/farms")
 async def list_farms(current_user: CurrentUser = Depends(get_current_user)):
     """List all registered farms belonging to current farmer from Supabase."""
     farms = get_user_farms(current_user.id)
@@ -147,6 +154,7 @@ async def list_farms(current_user: CurrentUser = Depends(get_current_user)):
 
 
 @farmer_router.post("/farms", status_code=201)
+@farmer_router.post("/farmer/farms", status_code=201)
 async def add_farm(
     payload: FarmCreateRequest,
     current_user: CurrentUser = Depends(get_current_user),
@@ -162,6 +170,7 @@ async def add_farm(
 
 
 @farmer_router.get("/farms/{farm_id}")
+@farmer_router.get("/farmer/farms/{farm_id}")
 async def get_farm(
     farm_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -174,6 +183,7 @@ async def get_farm(
 
 
 @farmer_router.patch("/farms/{farm_id}")
+@farmer_router.patch("/farmer/farms/{farm_id}")
 async def patch_farm(
     farm_id: str,
     payload: FarmUpdateRequest,
@@ -187,6 +197,7 @@ async def patch_farm(
 
 
 @farmer_router.delete("/farms/{farm_id}")
+@farmer_router.delete("/farmer/farms/{farm_id}")
 async def remove_farm(
     farm_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -199,6 +210,7 @@ async def remove_farm(
 
 
 @farmer_router.post("/farms/import-legacy")
+@farmer_router.post("/farmer/farms/import-legacy")
 async def import_legacy_farm_records(
     payload: ImportLegacyFarmsRequest,
     current_user: CurrentUser = Depends(get_current_user),
@@ -212,6 +224,7 @@ async def import_legacy_farm_records(
 # 3. Daily Field Actions Endpoints
 # -----------------------------------------------------------------------------
 @farmer_router.get("/field-actions")
+@farmer_router.get("/farmer/field-actions")
 async def list_field_actions(
     farm_id: Optional[str] = Query(None),
     current_user: CurrentUser = Depends(get_current_user),
@@ -222,6 +235,7 @@ async def list_field_actions(
 
 
 @farmer_router.post("/field-actions", status_code=201)
+@farmer_router.post("/farmer/field-actions", status_code=201)
 async def add_field_action(
     payload: FieldActionCreateRequest,
     current_user: CurrentUser = Depends(get_current_user),
@@ -246,6 +260,7 @@ async def add_field_action(
 
 
 @farmer_router.delete("/field-actions/{action_id}")
+@farmer_router.delete("/farmer/field-actions/{action_id}")
 async def remove_field_action(
     action_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -261,6 +276,7 @@ async def remove_field_action(
 # 4. Prediction History Endpoints
 # -----------------------------------------------------------------------------
 @farmer_router.get("/predictions")
+@farmer_router.get("/farmer/predictions")
 async def list_predictions(
     prediction_type: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=100),
@@ -272,6 +288,7 @@ async def list_predictions(
 
 
 @farmer_router.get("/predictions/{prediction_id}")
+@farmer_router.get("/farmer/predictions/{prediction_id}")
 async def get_prediction(
     prediction_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -287,6 +304,7 @@ async def get_prediction(
 # 5. Diagnostics & Crop Health Endpoints
 # -----------------------------------------------------------------------------
 @farmer_router.get("/diagnostics")
+@farmer_router.get("/farmer/diagnostics")
 async def list_diagnostics(
     limit: int = Query(50, ge=1, le=100),
     current_user: CurrentUser = Depends(get_current_user),
@@ -297,6 +315,7 @@ async def list_diagnostics(
 
 
 @farmer_router.get("/diagnostics/{diagnostic_id}")
+@farmer_router.get("/farmer/diagnostics/{diagnostic_id}")
 async def get_diagnostic(
     diagnostic_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -309,6 +328,7 @@ async def get_diagnostic(
 
 
 @farmer_router.post("/diagnostics/upload", status_code=201)
+@farmer_router.post("/farmer/diagnostics/upload", status_code=201)
 async def upload_diagnostic_image(
     file: UploadFile = File(...),
     crop: str = Form("Rice"),
@@ -384,6 +404,7 @@ async def upload_diagnostic_image(
 # 6. Saved Crop Searches Endpoints
 # -----------------------------------------------------------------------------
 @farmer_router.get("/searches")
+@farmer_router.get("/farmer/searches")
 async def list_searches(current_user: CurrentUser = Depends(get_current_user)):
     """Fetch saved crop searches for authenticated farmer."""
     searches = get_user_searches(current_user.id)
@@ -391,6 +412,7 @@ async def list_searches(current_user: CurrentUser = Depends(get_current_user)):
 
 
 @farmer_router.post("/searches", status_code=201)
+@farmer_router.post("/farmer/searches", status_code=201)
 async def add_search(
     payload: SavedSearchCreateRequest,
     current_user: CurrentUser = Depends(get_current_user),
@@ -403,6 +425,7 @@ async def add_search(
 
 
 @farmer_router.delete("/searches/{search_id}")
+@farmer_router.delete("/farmer/searches/{search_id}")
 async def remove_search(
     search_id: str,
     current_user: CurrentUser = Depends(get_current_user),
@@ -418,6 +441,7 @@ async def remove_search(
 # 7. User Preferences Endpoints
 # -----------------------------------------------------------------------------
 @farmer_router.get("/preferences")
+@farmer_router.get("/farmer/preferences")
 async def get_preferences(current_user: CurrentUser = Depends(get_current_user)):
     """Fetch user preferences from Supabase."""
     prefs = get_user_preferences(current_user.id)
@@ -425,6 +449,7 @@ async def get_preferences(current_user: CurrentUser = Depends(get_current_user))
 
 
 @farmer_router.patch("/preferences")
+@farmer_router.patch("/farmer/preferences")
 async def patch_preferences(
     payload: PreferencesUpdateRequest,
     current_user: CurrentUser = Depends(get_current_user),
@@ -432,3 +457,4 @@ async def patch_preferences(
     """Update durable user preferences in Supabase."""
     updated = update_user_preferences(current_user.id, payload.model_dump(exclude_unset=True))
     return updated
+

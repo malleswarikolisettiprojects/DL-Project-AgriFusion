@@ -111,6 +111,8 @@ def create_farm(user_id: str, farm_data: Dict[str, Any]) -> Optional[Dict[str, A
         "land_area": farm_data.get("land_area"),
         "land_area_unit": farm_data.get("land_area_unit", "acres"),
         "soil_type": farm_data.get("soil_type"),
+        "crop": farm_data.get("crop"),
+        "irrigation_type": farm_data.get("irrigation_type"),
         "created_at": now,
         "updated_at": now,
     }
@@ -131,7 +133,8 @@ def update_farm(user_id: str, farm_id: str, farm_data: Dict[str, Any]) -> Option
     
     allowed_fields = [
         "name", "state", "district", "village",
-        "latitude", "longitude", "land_area", "land_area_unit", "soil_type"
+        "latitude", "longitude", "land_area", "land_area_unit", "soil_type",
+        "crop", "irrigation_type"
     ]
     update_data = {k: v for k, v in farm_data.items() if k in allowed_fields and v is not None}
     update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -195,6 +198,8 @@ def import_legacy_farms(user_id: str, farm_records: List[Dict[str, Any]]) -> Dic
             "land_area": raw.get("land_area") or raw.get("area"),
             "land_area_unit": raw.get("land_area_unit") or "acres",
             "soil_type": raw.get("soil_type"),
+            "crop": raw.get("crop") or raw.get("primary_crop"),
+            "irrigation_type": raw.get("irrigation_type"),
         }
 
         created = create_farm(user_id, farm_obj)
