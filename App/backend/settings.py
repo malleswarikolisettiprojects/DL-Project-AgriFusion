@@ -65,7 +65,14 @@ def _get_env(key: str) -> Optional[str]:
 
 # Database
 SUPABASE_URL: Optional[str] = _get_env("SUPABASE_URL")
-SUPABASE_KEY: Optional[str] = _get_env("SUPABASE_KEY")
+SUPABASE_KEY: Optional[str] = (
+    _get_env("SUPABASE_KEY")
+    or _get_env("SUPABASE_SERVICE_ROLE_KEY")
+    or _get_env("SUPABASE_ANON_KEY")
+)
+SUPABASE_SERVICE_ROLE_KEY: Optional[str] = _get_env("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_ANON_KEY: Optional[str] = _get_env("SUPABASE_ANON_KEY")
+
 
 # External AI providers
 ROBOFLOW_API_KEY: Optional[str] = _get_env("ROBOFLOW_API_KEY")

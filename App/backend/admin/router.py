@@ -498,18 +498,16 @@ async def admin_overview(
         ("market_price", "App.backend.market", "predict_market_price"),
         ("object_detection", "App.backend.disease_detection", "predict_disease_and_pests"),
     ]
-    model_list = []
+    models_map = {}
     for m_name, m_mod, m_func in required_models:
         try:
             mod = __import__(m_mod, fromlist=[m_func])
-            if hasattr(mod, m_func):
-                model_list.append({"name": m_name, "status": "ready"})
-            else:
-                model_list.append({"name": m_name, "status": "unavailable"})
+            st = "ready" if hasattr(mod, m_func) else "unavailable"
         except Exception:
-            model_list.append({"name": m_name, "status": "unavailable"})
+            st = "unavailable"
+        models_map[m_name] = {"status": st}
 
-    avail_count = sum(1 for m in model_list if m["status"] == "ready")
+    avail_count = sum(1 for m in models_map.values() if m["status"] == "ready")
     exp_count = len(required_models)
     if avail_count == exp_count:
         models_service_status = "ready"
@@ -526,7 +524,7 @@ async def admin_overview(
         "message": models_service_msg,
         "available_count": avail_count,
         "expected_count": exp_count,
-        "models": model_list
+        "models": models_map
     }
 
     # 5. Real Admin Metrics

@@ -217,6 +217,8 @@ def test_admin_dashboard_and_audit():
     assert "database" in data["services"]
     assert "rag_documents" in data["services"]
     assert "models" in data["services"]
+    assert "crop_recommendation" in data["services"]["models"]["models"]
+    assert data["services"]["models"]["models"]["crop_recommendation"]["status"] == "ready"
 
     # Metrics dictionary validation
     metrics = data["metrics"]
