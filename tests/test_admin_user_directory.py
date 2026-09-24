@@ -253,6 +253,61 @@ def test_role_and_status_update_propagation_to_auth_reads():
         assert profile["status"] == "suspended"
 
 
+def test_profile_creation_on_signup():
+    """Verify register_user inserts record into public.profiles with default farmer role."""
+    mock_supabase = MagicMock()
+    mock_profiles_table = MagicMock()
+    mock_supabase.table.return_value = mock_profiles_table
+
+    mock_select = MagicMock()
+    mock_profiles_table.select.return_value = mock_select
+    mock_eq = MagicMock()
+    mock_select.eq.return_value = mock_eq
+    mock_eq.execute.return_value = MagicMock(data=[])  # No existing profile
+
+    mock_insert = MagicMock()
+    mock_profiles_table.insert.return_value = mock_insert
+    mock_insert.execute.return_value = MagicMock(data=[{"id": "new-user-1", "email": "new@farmer.com", "role": "farmer"}])
+
+    with patch("App.backend.database.auth_db._get_supabase", return_value=mock_supabase):
+        from App.backend.database.auth_db import register_user
+        ok, msg = register_user("New Farmer", "new@farmer.com", "Password123!")
+        assert ok is True
+        assert "Registration successful" in msg
+
+        mock_profiles_table.insert.assert_called_once()
+        insert_arg = mock_profiles_table.insert.call_args[0][0]
+        assert insert_arg["email"] == "new@farmer.com"
+        assert insert_arg["full_name"] == "New Farmer"
+        assert insert_arg["role"] == "farmer"
+        assert insert_arg["status"] == "active"
+
+
+def test_update_user_profile_ignores_privilege_escalation():
+    """Verify farmer update_user_profile cannot change role or status."""
+    mock_supabase = MagicMock()
+    mock_profiles_table = MagicMock()
+    mock_supabase.table.return_value = mock_profiles_table
+
+    mock_update = MagicMock()
+    mock_profiles_table.update.return_value = mock_update
+    mock_eq = MagicMock()
+    mock_update.eq.return_value = mock_eq
+    mock_eq.execute.return_value = MagicMock(data=[{"id": "usr-1", "full_name": "New Name", "role": "farmer"}])
+
+    with patch("App.backend.database.farmer_db.supabase", mock_supabase):
+        from App.backend.database.farmer_db import update_user_profile
+        # Attempt to inject role="admin" and status="suspended"
+        res = update_user_profile("usr-1", {"full_name": "New Name", "phone": "1234567890", "role": "admin", "status": "suspended"})
+        
+        mock_profiles_table.update.assert_called_once()
+        update_arg = mock_profiles_table.update.call_args[0][0]
+        assert "full_name" in update_arg
+        assert "phone" in update_arg
+        assert "role" not in update_arg
+        assert "status" not in update_arg
+
+
 if __name__ == "__main__":
     test_profiles_optional_fields()
     print("[PASS] test_profiles_optional_fields")
@@ -269,4 +324,11 @@ if __name__ == "__main__":
     test_role_and_status_update_propagation_to_auth_reads()
     print("[PASS] test_role_and_status_update_propagation_to_auth_reads")
 
-    print("\nALL ADMIN USER DIRECTORY TESTS PASSED SUCCESSFULLY!")
+    test_profile_creation_on_signup()
+    print("[PASS] test_profile_creation_on_signup")
+
+    test_update_user_profile_ignores_privilege_escalation()
+    print("[PASS] test_update_user_profile_ignores_privilege_escalation")
+
+    print("\nALL ADMIN USER DIRECTORY & FARMER AUTH TESTS PASSED SUCCESSFULLY!")
+
