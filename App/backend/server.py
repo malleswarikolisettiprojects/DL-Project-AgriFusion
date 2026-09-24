@@ -64,10 +64,6 @@ from App.backend.settings import FRONTEND_URL, get_config_status
 from App.backend.auth.router import router as auth_router
 from App.backend.admin.router import admin_router
 from App.backend.farmer.router import farmer_router
-
-app.include_router(auth_router)
-app.include_router(admin_router)
-app.include_router(farmer_router)
 from App.backend.auth.dependencies import (
     CurrentUser,
     get_current_user,
@@ -110,6 +106,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth_router)
+app.include_router(admin_router)
+app.include_router(farmer_router)
 
 @app.on_event("startup")
 def startup_db_init():
