@@ -661,11 +661,37 @@ def fetch_all_supabase_predictions() -> dict:
 # ──────────────────────────────────────────────────────────────────────────────
 # Admin — Privacy-Preserving Regional Farm Profile Aggregation
 # ──────────────────────────────────────────────────────────────────────────────
-def _map_area_range(acres_val: Optional[Union[float, int, str]]) -> str:
-    if acres_val is None:
+def _convert_to_acres(land_area: Optional[Union[float, int, str]], unit: Optional[str]) -> Optional[float]:
+    """Convert land area value from any recognized unit to acres."""
+    if land_area is None:
+        return None
+    try:
+        val = float(land_area)
+        if val <= 0:
+            return None
+    except (ValueError, TypeError):
+        return None
+
+    unit_clean = (unit or "acres").strip().lower()
+    if unit_clean in ("ha", "hectare", "hectares"):
+        return val * 2.47105
+    elif unit_clean in ("cents", "cent"):
+        return val * 0.01
+    elif unit_clean in ("sq_m", "sqm", "square_meters", "square_meter"):
+        return val * 0.000247105
+    elif unit_clean in ("guntha", "gunte"):
+        return val * 0.025
+    else:  # default "acres"
+        return val
+
+
+def _map_area_range(acres_val: Optional[Union[float, int, str]], unit: Optional[str] = None) -> str:
+    """Map numeric area in acres to standardized area range bucket."""
+    acres = _convert_to_acres(acres_val, unit) if unit is not None else acres_val
+    if acres is None:
         return "1–2 acres"
     try:
-        val = float(acres_val)
+        val = float(acres)
         if val < 1.0:
             return "<1 acre"
         elif val < 2.0:
@@ -687,50 +713,49 @@ def fetch_regional_farm_profiles(
     irrigation_type: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
-    min_group_threshold: int = 5,
+    min_group_threshold: int = 1,
 ) -> dict:
     """
-    Fetch privacy-preserving aggregated regional farm profile data.
+    Fetch privacy-preserving aggregated regional farm profile data from public.farms.
     Groups records by (state, district, crop, area_range, irrigation_type).
     Groups with fewer than min_group_threshold records are suppressed.
-    Returns safe minimized fields only.
+    Returns safe minimized aggregate fields only (id, user_id, farm name, village, coordinates NEVER returned).
+    Raises RuntimeError on database failure (fails closed with 500 error).
     """
     init_db()
+    supabase = _get_supabase_admin()
+    records = None
 
-    # Try Supabase first
-    supabase = _get_supabase()
-    records = []
     if supabase is not None:
         try:
-            res = supabase.table("farm_profiles").select("state, district, crop, area_acres, area, irrigation_type").execute()
-            if res.data:
+            res = (
+                supabase.table("farms")
+                .select("state, district, crop, land_area, land_area_unit, irrigation_type")
+                .execute()
+            )
+            if res.data is not None:
                 records = res.data
-        except Exception:
-            records = []
+            else:
+                logger.error("Supabase query on public.farms returned None response")
+                raise RuntimeError("Database query failed for regional farm profiles")
+        except Exception as exc:
+            logger.error("Supabase regional farms DB query failure: %s", exc)
+            raise RuntimeError("Database query failed for regional farm profiles") from exc
 
-    # If Supabase has no data or is not available, query SQLite fallback
-    if not records:
+    if records is None:
+        from App.backend.settings import SUPABASE_URL
+        if SUPABASE_URL:
+            raise RuntimeError("Database query failed for regional farm profiles: Server-side Supabase client unavailable.")
         try:
             conn = _get_db_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='farm_profiles'")
-            if cursor.fetchone():
-                cursor.execute("SELECT state, district, crop, area_acres, irrigation_type FROM farm_profiles")
-                rows = cursor.fetchall()
-                records = [dict(r) for r in rows]
+            cursor.execute("SELECT state, district, crop, land_area, land_area_unit, irrigation_type FROM farms")
+            rows = cursor.fetchall()
+            records = [dict(r) for r in rows]
             conn.close()
-        except Exception:
-            records = []
-
-    if not records:
-        return {
-            "items": [],
-            "page": page,
-            "page_size": page_size,
-            "total": 0,
-            "suppressed_groups": 0,
-            "privacy_note": "Farm-profile aggregation is not configured or no sufficient data is available.",
-        }
+        except Exception as exc:
+            logger.error("SQLite regional farms query failure: %s", exc)
+            raise RuntimeError("Database query failed for regional farm profiles") from exc
 
     from collections import Counter
 
@@ -740,8 +765,9 @@ def fetch_regional_farm_profiles(
         r_district = (rec.get("district") or "").strip()
         r_crop = (rec.get("crop") or "").strip() or None
         r_irrigation = (rec.get("irrigation_type") or "").strip() or None
-        area_val = rec.get("area_acres") if rec.get("area_acres") is not None else rec.get("area")
-        r_area_range = _map_area_range(area_val)
+        area_val = rec.get("land_area")
+        unit_val = rec.get("land_area_unit")
+        r_area_range = _map_area_range(area_val, unit_val)
 
         # Apply optional filters
         if state and r_state.lower() != state.strip().lower():
@@ -779,9 +805,9 @@ def fetch_regional_farm_profiles(
     if total > 0:
         privacy_note = "Only minimized regional farm information is shown."
     elif suppressed_groups > 0:
-        privacy_note = "Small groups are suppressed to reduce re-identification risk."
+        privacy_note = f"All {suppressed_groups} regional farm group(s) were suppressed because they had fewer than {min_group_threshold} record(s)."
     else:
-        privacy_note = "Farm-profile aggregation is not configured or no sufficient data is available."
+        privacy_note = "No farm records match the requested filter criteria."
 
     return {
         "items": paged_items,

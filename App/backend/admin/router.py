@@ -865,20 +865,21 @@ async def update_user_role(
     response_model=RegionalFarmProfileResponse,
 )
 async def get_regional_farm_profiles(
-    state: Optional[str] = None,
-    district: Optional[str] = None,
-    crop: Optional[str] = None,
-    irrigation_type: Optional[str] = None,
+    state: Optional[str] = Query(None),
+    district: Optional[str] = Query(None),
+    crop: Optional[str] = Query(None),
+    irrigation_type: Optional[str] = Query(None),
+    min_group_threshold: int = Query(1, ge=1, le=50),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """
     Retrieve privacy-preserving aggregated regional farm profile data.
-    Suppresses small groups below the privacy threshold (minimum 5 records) to protect farmer privacy.
+    Suppresses small groups below the privacy threshold (minimum 1 record by default).
     Only returns minimized regional attributes (state, district, crop, area_range, irrigation_type).
+    Fails closed with 500 error if database query fails.
     """
-    # Audit logging for regional farm aggregation view
     await record_audit_event(
         admin_user_id=admin_user.id,
         action="regional_farm_profiles_viewed",
@@ -890,21 +891,29 @@ async def get_regional_farm_profiles(
                 "crop": crop,
                 "irrigation_type": irrigation_type,
             },
+            "min_group_threshold": min_group_threshold,
             "page": page,
             "page_size": page_size,
         },
     )
 
-    data = fetch_regional_farm_profiles(
-        state=state,
-        district=district,
-        crop=crop,
-        irrigation_type=irrigation_type,
-        page=page,
-        page_size=page_size,
-        min_group_threshold=1,
-    )
-    return data
+    try:
+        data = fetch_regional_farm_profiles(
+            state=state,
+            district=district,
+            crop=crop,
+            irrigation_type=irrigation_type,
+            page=page,
+            page_size=page_size,
+            min_group_threshold=min_group_threshold,
+        )
+        return data
+    except Exception as exc:
+        logger.error("Admin regional farm profiles endpoint error: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="The backend encountered an internal error.",
+        )
 
 
 @admin_router.get(
