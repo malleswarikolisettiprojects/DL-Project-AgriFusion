@@ -7,6 +7,48 @@
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- -----------------------------------------------------------------------------
+-- Pre-Migration Safety: Reconcile missing user_id columns on pre-existing tables
+-- -----------------------------------------------------------------------------
+DO $$ 
+BEGIN 
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='farms') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='farms' AND column_name='user_id') THEN
+        ALTER TABLE public.farms ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='prediction_records') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='prediction_records' AND column_name='user_id') THEN
+        ALTER TABLE public.prediction_records ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='diagnostic_reports') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='diagnostic_reports' AND column_name='user_id') THEN
+        ALTER TABLE public.diagnostic_reports ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='daily_field_actions') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='daily_field_actions' AND column_name='user_id') THEN
+        ALTER TABLE public.daily_field_actions ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='saved_searches') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='saved_searches' AND column_name='user_id') THEN
+        ALTER TABLE public.saved_searches ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='user_preferences') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='user_preferences' AND column_name='user_id') THEN
+        ALTER TABLE public.user_preferences ADD COLUMN user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='scheme_matches') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='scheme_matches' AND column_name='user_id') THEN
+        ALTER TABLE public.scheme_matches ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='system_events') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='system_events' AND column_name='user_id') THEN
+        ALTER TABLE public.system_events ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+    END IF;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='farmer_feedback') AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='farmer_feedback' AND column_name='user_id') THEN
+        ALTER TABLE public.farmer_feedback ADD COLUMN user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+    END IF;
+END $$;
+
+-- -----------------------------------------------------------------------------
 -- 1. Profiles Table (1:1 with auth.users)
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.profiles (
