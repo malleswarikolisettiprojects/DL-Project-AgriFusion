@@ -392,3 +392,61 @@ CREATE POLICY "Authenticated read knowledge docs" ON public.knowledge_documents 
 -- 9. Admin Audit Logs & Approvals RLS Policies (Restricted to authenticated admin/service-role)
 DROP POLICY IF EXISTS "No public audit log reads" ON public.admin_audit_logs;
 -- Ordinary users cannot read or delete audit logs. Server-side admin queries use service role or admin token.
+
+-- -----------------------------------------------------------------------------
+-- 10. System Events Table (Persisted Operational Events)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.system_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    event_type TEXT NOT NULL,
+    module TEXT,
+    status TEXT NOT NULL DEFAULT 'success',
+    http_status INTEGER DEFAULT 200,
+    error_code TEXT,
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    request_id TEXT,
+    metadata JSONB DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_system_events_event_type ON public.system_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_system_events_module ON public.system_events(module);
+CREATE INDEX IF NOT EXISTS idx_system_events_status ON public.system_events(status);
+CREATE INDEX IF NOT EXISTS idx_system_events_created_at ON public.system_events(created_at DESC);
+
+ALTER TABLE public.system_events ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Authenticated insert system events" ON public.system_events;
+CREATE POLICY "Authenticated insert system events" ON public.system_events FOR INSERT WITH CHECK (auth.role() = 'authenticated' OR auth.role() = 'anon');
+
+-- -----------------------------------------------------------------------------
+-- 11. Farmer Feedback Table (Feedback Awaiting Review)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.farmer_feedback (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    advisory_id TEXT,
+    prediction_id UUID,
+    rating INTEGER NOT NULL DEFAULT 5,
+    category TEXT NOT NULL DEFAULT 'general',
+    message TEXT NOT NULL,
+    language TEXT DEFAULT 'English',
+    status TEXT NOT NULL DEFAULT 'pending_review',
+    priority TEXT NOT NULL DEFAULT 'normal',
+    admin_note_count INTEGER DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    resolved_at TIMESTAMPTZ,
+    resolved_by_admin_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_farmer_feedback_status ON public.farmer_feedback(status);
+CREATE INDEX IF NOT EXISTS idx_farmer_feedback_user_id ON public.farmer_feedback(user_id);
+CREATE INDEX IF NOT EXISTS idx_farmer_feedback_created_at ON public.farmer_feedback(created_at DESC);
+
+ALTER TABLE public.farmer_feedback ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Farmers insert own feedback" ON public.farmer_feedback;
+CREATE POLICY "Farmers insert own feedback" ON public.farmer_feedback FOR INSERT WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
+
+DROP POLICY IF EXISTS "Farmers read own feedback" ON public.farmer_feedback;
+CREATE POLICY "Farmers read own feedback" ON public.farmer_feedback FOR SELECT USING (auth.uid() = user_id);
+

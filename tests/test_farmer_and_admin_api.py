@@ -6,7 +6,14 @@ diagnostic upload, admin metrics, role mutation, audit logging, farmer isolation
 authorization failure (403), and CORS preflight.
 """
 
-import pytest
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+try:
+    import pytest
+except ImportError:
+    pytest = None
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
@@ -198,18 +205,68 @@ def test_farmer_admin_authorization_failure():
 def test_admin_dashboard_and_audit():
     test_app.dependency_overrides[get_current_user] = mock_admin_user
     test_app.dependency_overrides[require_admin] = mock_admin_user
-    
-    # Admin dashboard
+
+    # Admin dashboard GET /api/v1/admin/dashboard
     res_dash = client.get("/api/v1/admin/dashboard")
     assert res_dash.status_code == 200
-    assert "metrics" in res_dash.json()
-    
+    data = res_dash.json()
+    assert data["success"] is True
+    assert "services" in data
+    assert "metrics" in data
+    assert "backend" in data["services"]
+    assert "database" in data["services"]
+    assert "rag_documents" in data["services"]
+    assert "models" in data["services"]
+
+    # Metrics dictionary validation
+    metrics = data["metrics"]
+    assert "total_users" in metrics
+    assert "advisory_queries" in metrics
+    assert "prediction_requests" in metrics
+    assert "failed_requests" in metrics
+    assert "feedback_awaiting_review" in metrics
+
+    # Overview alias GET /api/v1/admin/overview
+    res_overview = client.get("/api/v1/admin/overview")
+    assert res_overview.status_code == 200
+    assert res_overview.json()["success"] is True
+
+    # RAG Sync POST /api/v1/admin/knowledge-sources/sync
+    res_sync = client.post("/api/v1/admin/knowledge-sources/sync")
+    assert res_sync.status_code == 200
+    assert res_sync.json()["success"] is True
+    assert res_sync.json()["status"] == "ready"
+
     # Audit logs list & CSV export
     res_audit = client.get("/api/v1/admin/audit-logs")
     assert res_audit.status_code == 200
-    
+
     res_export = client.get("/api/v1/admin/audit-logs/export")
     assert res_export.status_code == 200
     assert "text/csv" in res_export.headers["content-type"]
-    
+
     test_app.dependency_overrides.clear()
+
+
+if __name__ == "__main__":
+    print("Running integration test suite...")
+    test_health_endpoint()
+    print(" [1/8] test_health_endpoint passed")
+    test_cors_preflight()
+    print(" [2/8] test_cors_preflight passed")
+    test_farmer_profile_get_and_patch()
+    print(" [3/8] test_farmer_profile_get_and_patch passed")
+    test_farm_crud_and_isolation()
+    print(" [4/8] test_farm_crud_and_isolation passed")
+    test_daily_field_actions()
+    print(" [5/8] test_daily_field_actions passed")
+    test_diagnostic_upload()
+    print(" [6/8] test_diagnostic_upload passed")
+    test_farmer_admin_authorization_failure()
+    print(" [7/8] test_farmer_admin_authorization_failure passed")
+    test_admin_dashboard_and_audit()
+    print(" [8/8] test_admin_dashboard_and_audit passed")
+    print("\nALL 8/8 INTEGRATION TESTS PASSED SUCCESSFULLY!")
+
+
+

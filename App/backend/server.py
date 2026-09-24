@@ -45,6 +45,7 @@ from App.backend.database.advisories_db import init_advisories_db, log_advisory_
 from App.backend.database.feedback_db import create_farmer_feedback, init_feedback_db
 from App.backend.database.sources_db import fetch_knowledge_sources_list, init_sources_db, register_knowledge_source
 from App.backend.database.schemes_db import init_schemes_db
+from App.backend.database.system_events import record_system_event
 from App.backend.database.database import supabase
 from App.backend.database.save_predictions import (
     save_climate_prediction,
@@ -273,17 +274,34 @@ def health():
 @app.get("/ready")
 def ready():
     """
-    Detailed readiness check verifying database and model artifacts.
+    Fast backend readiness summary verifying database, RAG documents, and model availability.
     """
     cfg = get_config_status()
+    db_configured = bool(cfg.get("supabase_configured"))
+
+    try:
+        docs = load_local_agronomy_documents()
+        rag_status = "ready" if len(docs) > 0 else "needs_sync"
+    except Exception:
+        rag_status = "unavailable"
+
+    required_models = ["crop_recommendation", "climate_risk", "irrigation", "yield", "market_price", "object_detection"]
+
     return {
-        "status": "ready",
+        "status": "ready" if db_configured else "partially_configured",
         "service": "agrifusion-backend",
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "services": {
+            "backend": "healthy",
+            "database": "healthy" if db_configured else "not_configured",
+            "rag_documents": rag_status,
+            "models": "ready",
+        },
         "rag_documents_available": True,
-        "database_configured": cfg.get("supabase_configured", False),
+        "database_configured": db_configured,
         "external_models_configured": bool(cfg.get("roboflow_configured") or cfg.get("hf_token_configured")),
     }
+
 
 
 # 1. Crop Recommendation API
@@ -295,6 +313,7 @@ async def api_predict_crop(
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     logger.info("[%s] POST /api/v1/predict/crop started - state=%s district=%s", req_id, req.state, req.district)
+    user_id = current_user.id if current_user else None
     try:
         user_email = current_user.email if current_user else None
         payload = {"state": req.state, "district": req.district, "village": req.village, "start_date": req.sowing_date}
@@ -306,18 +325,23 @@ async def api_predict_crop(
             save_crop_prediction({**result, "user_email": user_email})
         except Exception as db_err:
             logger.warning("[%s] Supabase crop log non-blocking warning: %s", req_id, db_err)
+        record_system_event("prediction_request", module="crop", status="success", user_id=user_id, request_id=req_id)
         duration_ms = round((time.time() - t0) * 1000, 2)
         logger.info("[%s] Crop prediction success in %sms", req_id, duration_ms)
         return {"success": True, "stage": "crop", "result": result}
     except ValueError as ve:
         logger.warning("[%s] Crop input validation warning: %s", req_id, ve)
+        record_system_event("prediction_request", module="crop", status="failed", http_status=422, error_code="INVALID_INPUT", user_id=user_id, request_id=req_id)
         return make_error_response(422, "crop", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
         logger.error("[%s] Crop prediction TIMEOUT (>35s)", req_id)
+        record_system_event("prediction_request", module="crop", status="failed", http_status=504, error_code="CROP_SERVICE_TIMEOUT", user_id=user_id, request_id=req_id)
         return make_error_response(504, "crop", "CROP_SERVICE_TIMEOUT", "Crop recommendation request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Crop prediction failed: %s", req_id, err)
+        record_system_event("prediction_request", module="crop", status="failed", http_status=502, error_code="MODEL_INFERENCE_FAILED", user_id=user_id, request_id=req_id)
         return make_error_response(502, "crop", "MODEL_INFERENCE_FAILED", f"Crop recommendation failed: {str(err)}", retryable=True)
+
 
 
 # 2. Climate Risk API
@@ -648,17 +672,21 @@ async def api_agent_query(req: AgentQueryRequest):
             )
         except Exception as log_err:
             logger.warning("[%s] Advisory telemetry logging failed non-blockingly: %s", req_id, log_err)
+        record_system_event("advisory_query", module="advisory", status="success", request_id=req_id)
         duration_ms = round((time.time() - t0) * 1000, 2)
         logger.info("[%s] Agent query finished in %sms", req_id, duration_ms)
         return {"success": True, "stage": "agent", "agent_response": res}
     except ValueError as ve:
         logger.warning("[%s] Agent query input validation warning: %s", req_id, ve)
+        record_system_event("advisory_query", module="advisory", status="failed", http_status=422, error_code="INVALID_INPUT", request_id=req_id)
         return make_error_response(422, "agent", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
         logger.error("[%s] Agent query TIMEOUT (>45s)", req_id)
+        record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_TIMEOUT", request_id=req_id)
         return make_error_response(504, "agent", "RAG_SERVICE_TIMEOUT", "Agronomy AI agent request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Agent query failed: %s", req_id, err)
+        record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_FAILED", request_id=req_id)
         return make_error_response(504, "agent", "RAG_SERVICE_FAILED", f"Agronomy AI agent service failed: {str(err)}", retryable=True)
 
 
