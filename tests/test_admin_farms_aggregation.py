@@ -198,7 +198,7 @@ def test_identifying_fields_never_returned():
     app.dependency_overrides[require_admin] = mock_admin_user
 
     with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
-        res = client.get("/api/v1/admin/farms")
+        res = client.get("/api/v1/admin/farms?min_group_threshold=1")
         assert res.status_code == 200
         data = res.json()
         assert len(data["items"]) == 1
@@ -214,21 +214,81 @@ def test_identifying_fields_never_returned():
     app.dependency_overrides.clear()
 
 
+# -----------------------------------------------------------------------------
+# 7. Missing State or District Handling
+# -----------------------------------------------------------------------------
+def test_farms_missing_state_district():
+    """Verify farms missing state or district are excluded from groups without failing."""
+    mock_supabase = MagicMock()
+    mock_farms_table = MagicMock()
+    mock_supabase.table.return_value = mock_farms_table
+    mock_select = MagicMock()
+    mock_farms_table.select.return_value = mock_select
+
+    # 1 valid farm, 2 incomplete farms missing state or district
+    mock_select.execute.return_value = MagicMock(data=[
+        {"state": "Andhra Pradesh", "district": "Visakhapatnam", "crop": "Paddy", "land_area": 2.0, "land_area_unit": "acres", "irrigation_type": "Drip"},
+        {"state": "", "district": "Visakhapatnam", "crop": "Paddy", "land_area": 2.0, "land_area_unit": "acres", "irrigation_type": "Drip"},
+        {"state": "Andhra Pradesh", "district": None, "crop": "Paddy", "land_area": 2.0, "land_area_unit": "acres", "irrigation_type": "Drip"},
+    ])
+
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
+        res = fetch_regional_farm_profiles(min_group_threshold=1)
+        assert res["total"] == 1
+        assert res["items"][0]["state"] == "Andhra Pradesh"
+        assert res["items"][0]["district"] == "Visakhapatnam"
+
+
+# -----------------------------------------------------------------------------
+# 8. Pagination Verification
+# -----------------------------------------------------------------------------
+def test_pagination_regional_farm_profiles():
+    """Verify pagination correctly slices groups across pages."""
+    mock_supabase = MagicMock()
+    mock_farms_table = MagicMock()
+    mock_supabase.table.return_value = mock_farms_table
+    mock_select = MagicMock()
+    mock_farms_table.select.return_value = mock_select
+
+    mock_select.execute.return_value = MagicMock(data=[
+        {"state": "Andhra Pradesh", "district": "Visakhapatnam", "crop": "Paddy", "land_area": 2.0, "land_area_unit": "acres", "irrigation_type": "Drip"},
+        {"state": "Andhra Pradesh", "district": "Guntur", "crop": "Chilli", "land_area": 3.0, "land_area_unit": "acres", "irrigation_type": "Canal"},
+        {"state": "Telangana", "district": "Warangal", "crop": "Cotton", "land_area": 4.0, "land_area_unit": "acres", "irrigation_type": "Rainfed"},
+    ])
+
+    with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
+        # Page 1 with page_size 2
+        p1 = fetch_regional_farm_profiles(page=1, page_size=2, min_group_threshold=1)
+        assert p1["total"] == 3
+        assert len(p1["items"]) == 2
+        assert p1["page"] == 1
+        assert p1["page_size"] == 2
+
+        # Page 2 with page_size 2
+        p2 = fetch_regional_farm_profiles(page=2, page_size=2, min_group_threshold=1)
+        assert p2["total"] == 3
+        assert len(p2["items"]) == 1
+        assert p2["page"] == 2
+
+
 if __name__ == "__main__":
     print("Running Admin Regional Farm Profiles Aggregation Test Suite...")
     test_unit_conversion_to_acres()
-    print(" [1/6] test_unit_conversion_to_acres passed")
+    print(" [1/8] test_unit_conversion_to_acres passed")
     test_area_range_bucket_mapping()
-    print(" [2/6] test_area_range_bucket_mapping passed")
+    print(" [2/8] test_area_range_bucket_mapping passed")
     test_farms_present_group_meets_threshold()
-    print(" [3/6] test_farms_present_group_meets_threshold passed")
+    print(" [3/8] test_farms_present_group_meets_threshold passed")
     test_farms_present_but_suppressed()
-    print(" [4/6] test_farms_present_but_suppressed passed")
+    print(" [4/8] test_farms_present_but_suppressed passed")
     test_no_farms_present()
-    print(" [5/6] test_no_farms_present passed")
+    print(" [5/8] test_no_farms_present passed")
     test_database_query_failure_raises_500()
-    print(" [6/6] test_database_query_failure_raises_500 passed")
+    print(" [6/8] test_database_query_failure_raises_500 passed")
     test_identifying_fields_never_returned()
-    print(" [7/6] test_identifying_fields_never_returned passed")
+    print(" [7/8] test_identifying_fields_never_returned passed")
+    test_farms_missing_state_district()
+    print(" [8/8] test_farms_missing_state_district passed")
 
     print("\nALL ADMIN REGIONAL FARMS AGGREGATION TESTS PASSED SUCCESSFULLY!")
+

@@ -713,7 +713,7 @@ def fetch_regional_farm_profiles(
     irrigation_type: Optional[str] = None,
     page: int = 1,
     page_size: int = 25,
-    min_group_threshold: int = 1,
+    min_group_threshold: int = 5,
 ) -> dict:
     """
     Fetch privacy-preserving aggregated regional farm profile data from public.farms.
@@ -760,6 +760,7 @@ def fetch_regional_farm_profiles(
     from collections import Counter
 
     grouped_counts = Counter()
+    missing_region_count = 0
     for rec in records:
         r_state = (rec.get("state") or "").strip()
         r_district = (rec.get("district") or "").strip()
@@ -782,6 +783,11 @@ def fetch_regional_farm_profiles(
         if r_state and r_district:
             group_key = (r_state, r_district, r_crop, r_area_range, r_irrigation)
             grouped_counts[group_key] += 1
+        else:
+            missing_region_count += 1
+
+    if missing_region_count > 0:
+        logger.warning("Excluded %d farm records from regional aggregation due to missing state or district", missing_region_count)
 
     items = []
     suppressed_groups = 0

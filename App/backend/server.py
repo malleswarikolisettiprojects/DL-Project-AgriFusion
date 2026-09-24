@@ -267,7 +267,8 @@ def health():
     """
     return {
         "status": "ok",
-        "service": "agrifusion-backend"
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "supabase_connected": supabase is not None,
     }
 
 

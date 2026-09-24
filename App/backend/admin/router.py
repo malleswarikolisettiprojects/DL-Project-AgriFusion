@@ -869,14 +869,14 @@ async def get_regional_farm_profiles(
     district: Optional[str] = Query(None),
     crop: Optional[str] = Query(None),
     irrigation_type: Optional[str] = Query(None),
-    min_group_threshold: int = Query(1, ge=1, le=50),
+    min_group_threshold: int = Query(5, ge=1, le=50),
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """
     Retrieve privacy-preserving aggregated regional farm profile data.
-    Suppresses small groups below the privacy threshold (minimum 1 record by default).
+    Suppresses small groups below the privacy threshold (minimum 5 records by default).
     Only returns minimized regional attributes (state, district, crop, area_range, irrigation_type).
     Fails closed with 500 error if database query fails.
     """
