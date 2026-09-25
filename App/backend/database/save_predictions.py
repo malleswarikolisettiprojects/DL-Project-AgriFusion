@@ -373,6 +373,11 @@ def save_disease_prediction(data):
     now = datetime.now(timezone.utc).isoformat()
     user_id = data.get("user_id")
 
+    primary_diag = data.get("primary_diagnosis") or data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient")
+    top_conf = data.get("top_confidence")
+    if top_conf is None:
+        top_conf = data.get("top_disease_confidence") or data.get("top_pest_confidence") or data.get("top_nutrient_confidence")
+
     # 1. Save to user personal history (diagnostic_reports) if authenticated user_id present
     if user_id:
         try:
@@ -380,9 +385,9 @@ def save_disease_prediction(data):
                 "user_id": user_id,
                 "crop": data.get("crop") or "Unknown",
                 "image_storage_path": data.get("annotated_image_url"),
-                "detection_results": data.get("all_detections") or {},
-                "primary_diagnosis": data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient") or "Diagnosed",
-                "confidence": data.get("top_disease_confidence") or 0.9,
+                "detection_results": {"primary_diagnosis": primary_diag, "confidence": top_conf, "all_detections": data.get("all_detections") or []},
+                "primary_diagnosis": primary_diag,
+                "confidence": top_conf,
                 "created_at": now,
             }).execute()
         except Exception as e:
@@ -394,18 +399,17 @@ def save_disease_prediction(data):
                 prediction_type="disease_detection",
                 request_payload={"crop": data.get("crop")},
                 result_payload={
+                    "primary_diagnosis": primary_diag,
+                    "confidence": top_conf,
                     "top_disease": data.get("top_disease"),
                     "top_pest": data.get("top_pest"),
                     "top_nutrient": data.get("top_nutrient"),
-                    "confidence": data.get("top_disease_confidence") or 0.9,
                 },
             )
         except Exception as e:
             print(f"Warning: Could not save disease prediction to prediction_records: {e}")
 
     # 2. Save to unified ml_prediction_events table
-    top_diag = data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient") or "No issue detected"
-    conf = data.get("top_disease_confidence") or data.get("top_pest_confidence") or data.get("top_nutrient_confidence")
     ml_res = log_ml_prediction_event({
         "model_type": "disease_detection",
         "crop": data.get("crop"),
@@ -413,8 +417,8 @@ def save_disease_prediction(data):
         "district": data.get("district"),
         "request_summary": data.get("request_summary") or {"crop": data.get("crop")},
         "result_summary": data.get("result_summary") or {
-            "primary_diagnosis": top_diag,
-            "confidence": conf,
+            "primary_diagnosis": primary_diag,
+            "confidence": top_conf,
             "top_disease": data.get("top_disease"),
             "top_pest": data.get("top_pest"),
             "top_nutrient": data.get("top_nutrient"),
@@ -425,13 +429,15 @@ def save_disease_prediction(data):
         "user_id": user_id,
     })
 
-    # 3. Save to disease_prediction telemetry table (last call so call_args matches disease_prediction in tests)
+    # 3. Save to disease_prediction telemetry table
     telemetry_saved = False
     disease_resp = None
     try:
         insert_payload = {
             "user_email":              data.get("user_email"),
             "crop":                    data.get("crop"),
+            "primary_diagnosis":       primary_diag,
+            "confidence":              top_conf,
             "top_disease":             data.get("top_disease"),
             "top_disease_confidence":  data.get("top_disease_confidence"),
             "top_pest":                data.get("top_pest"),
@@ -439,7 +445,7 @@ def save_disease_prediction(data):
             "top_nutrient":            data.get("top_nutrient"),
             "top_nutrient_confidence": data.get("top_nutrient_confidence"),
             "annotated_image_url":     data.get("annotated_image_url"),
-            "all_detections":          data.get("all_detections"),
+            "all_detections":          data.get("all_detections") or [],
             "custom_crop_notice":      data.get("custom_crop_notice"),
         }
         if data.get("state"):

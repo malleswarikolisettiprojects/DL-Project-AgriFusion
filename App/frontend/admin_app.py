@@ -548,14 +548,20 @@ elif menu == "🔬 Crop Diagnostics Audit":
 
             if items:
                 for diag in items:
-                    conf_pct = round((diag.get("confidence") or 0.0) * 100, 1)
-                    with st.expander(f"🔬 {diag.get('diagnosis')} on {diag.get('crop')} ({conf_pct}% confidence) — {diag.get('state') or 'N/A'}"):
-                        st.write(f"**Report ID:** `{diag.get('id')}` | **Date:** {diag.get('created_at')} | **Severity:** `{diag.get('severity')}` | **Status:** `{diag.get('status')}`")
-                        rec_list = diag.get("treatment_recommendations") or []
-                        if rec_list:
-                            st.write("**Treatment Recommendations:**")
-                            for r in rec_list:
-                                st.write(f"- {r}")
+                    diag_title = diag.get("primary_diagnosis") or diag.get("diagnosis") or "No Pathology Detected"
+                    conf = diag.get("confidence")
+                    conf_str = f"{round(conf * 100, 1)}% confidence" if conf is not None else "N/A confidence"
+                    with st.expander(f"🔬 {diag_title} on {diag.get('crop')} ({conf_str}) — {diag.get('state') or 'N/A'}"):
+                        st.write(f"**Report ID:** `{diag.get('id')}` | **Date:** {diag.get('created_at')} | **Severity:** `{diag.get('severity') or 'N/A'}` | **Status:** `{diag.get('status') or 'N/A'}`")
+                        sec_list = diag.get("secondary_matches") or diag.get("treatment_recommendations") or []
+                        if sec_list:
+                            st.write("**Secondary Detections / Matches:**")
+                            for sec in sec_list:
+                                if isinstance(sec, dict):
+                                    s_conf = f" ({round(sec['confidence']*100, 1)}%)" if sec.get("confidence") is not None else ""
+                                    st.write(f"- **{sec.get('label')}**{s_conf} — *{sec.get('category') or sec.get('source') or 'secondary'}*")
+                                else:
+                                    st.write(f"- {sec}")
                         st.caption(diag_data.get("privacy_note", ""))
             else:
                 st.info("No diagnostic records match the selected filters.")

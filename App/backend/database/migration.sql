@@ -629,6 +629,8 @@ CREATE TABLE IF NOT EXISTS public.disease_prediction (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     user_email TEXT,
     crop TEXT,
+    primary_diagnosis TEXT,
+    confidence NUMERIC(5, 4),
     top_disease TEXT,
     top_disease_confidence NUMERIC(5, 4),
     top_pest TEXT,
@@ -642,6 +644,9 @@ CREATE TABLE IF NOT EXISTS public.disease_prediction (
     district TEXT,
     status TEXT DEFAULT 'reviewed'
 );
+
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS primary_diagnosis TEXT;
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS confidence NUMERIC(5, 4);
 
 CREATE INDEX IF NOT EXISTS idx_disease_pred_created_at ON public.disease_prediction(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_disease_pred_crop ON public.disease_prediction(crop);

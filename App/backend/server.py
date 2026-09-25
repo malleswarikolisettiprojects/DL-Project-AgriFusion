@@ -870,31 +870,78 @@ async def api_predict_disease(
             timeout=60.0,
         )
         duration_ms = round((time.time() - t0) * 1000, 2)
-        top_detections = result.get("top_detections", [])
-        secondary = result.get("secondary_detections", [])
-        top_disease = next((d for d in top_detections if "disease" in d.get("source", "").lower()), {})
-        top_pest = next((d for d in top_detections if "pest" in d.get("source", "").lower()), {})
-        top_nutrient = next((d for d in top_detections if "nutrient" in d.get("source", "").lower()), {})
-        all_detections = [
-            {"label": d.get("label"), "confidence": d.get("confidence"), "source": d.get("source")}
-            for d in (top_detections + secondary)
-        ]
+
+        primary_diag = result.get("primary_diagnosis")
+        top_conf = result.get("top_confidence")
+
+        sel_crop = result.get("selected_crop_result")
+        sel_pest = result.get("selected_pest_result")
+        sel_nutr = result.get("selected_nutrient_result")
+
+        crop_det = (sel_crop or {}).get("detection", {}) if isinstance(sel_crop, dict) else {}
+        pest_det = (sel_pest or {}).get("detection", {}) if isinstance(sel_pest, dict) else {}
+        nutr_det = (sel_nutr or {}).get("detection", {}) if isinstance(sel_nutr, dict) else {}
+
+        top_disease_label = crop_det.get("label")
+        top_disease_conf = crop_det.get("confidence")
+
+        top_pest_label = pest_det.get("label")
+        top_pest_conf = pest_det.get("confidence")
+
+        top_nutrient_label = nutr_det.get("label")
+        top_nutrient_conf = nutr_det.get("confidence")
+
+        all_detections = []
+        if top_disease_label:
+            all_detections.append({
+                "label": top_disease_label,
+                "confidence": top_disease_conf,
+                "category": "disease",
+                "source": (sel_crop or {}).get("provider") or "crop_model"
+            })
+        if top_pest_label:
+            all_detections.append({
+                "label": top_pest_label,
+                "confidence": top_pest_conf,
+                "category": "pest",
+                "source": (sel_pest or {}).get("provider") or "pest_model"
+            })
+        if top_nutrient_label:
+            all_detections.append({
+                "label": top_nutrient_label,
+                "confidence": top_nutrient_conf,
+                "category": "nutrient",
+                "source": (sel_nutr or {}).get("provider") or "nutrient_model"
+            })
+
+        for item in result.get("other_possible_detections", []):
+            if isinstance(item, dict) and item.get("label"):
+                if not any(d["label"] == item["label"] for d in all_detections):
+                    all_detections.append({
+                        "label": item.get("label"),
+                        "confidence": item.get("confidence"),
+                        "category": "secondary",
+                        "source": item.get("provider") or item.get("model") or "secondary_model"
+                    })
+
         try:
             save_res = save_disease_prediction({
                 "user_id":                 user_id,
                 "user_email":              user_email,
                 "crop":                    crop,
-                "top_disease":             top_disease.get("label"),
-                "top_disease_confidence":  top_disease.get("confidence"),
-                "top_pest":                top_pest.get("label"),
-                "top_pest_confidence":     top_pest.get("confidence"),
-                "top_nutrient":            top_nutrient.get("label"),
-                "top_nutrient_confidence": top_nutrient.get("confidence"),
-                "annotated_image_url":     result.get("annotated_image_url"),
+                "primary_diagnosis":       primary_diag,
+                "top_confidence":          top_conf,
+                "top_disease":             top_disease_label,
+                "top_disease_confidence":  top_disease_conf,
+                "top_pest":                top_pest_label,
+                "top_pest_confidence":     top_pest_conf,
+                "top_nutrient":            top_nutrient_label,
+                "top_nutrient_confidence": top_nutrient_conf,
+                "annotated_image_url":     result.get("image_url") or result.get("annotated_image_url"),
                 "all_detections":          all_detections,
-                "custom_crop_notice":      result.get("custom_crop_notice"),
+                "custom_crop_notice":      result.get("notice") or result.get("custom_crop_notice"),
                 "request_summary":         {"filename": image.filename, "content_type": content_type},
-                "result_summary":         {"all_detections_count": len(all_detections), "top_disease": top_disease.get("label")},
+                "result_summary":         {"primary_diagnosis": primary_diag, "confidence": top_conf, "all_detections_count": len(all_detections)},
                 "status":                 "success",
                 "latency_ms":              duration_ms,
             })

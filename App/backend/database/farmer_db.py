@@ -463,47 +463,55 @@ def get_all_diagnostics_for_admin(
                 res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
                 raw_items = res.data or []
 
-            # 2. Build item list with secondary_matches mapping (NO treatment_recommendations alias)
+            # 2. Build item list with secondary_matches mapping
             items = []
             for r in raw_items:
-                diag_name = r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient") or "Diagnosed"
-                conf_val = float(r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence") or 0.9)
+                diag_name = r.get("primary_diagnosis") or r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient")
+                conf_raw = r.get("confidence")
+                if conf_raw is None:
+                    conf_raw = r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence")
+                conf_val = float(conf_raw) if conf_raw is not None else None
+                
                 all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
                 
                 sec_matches = []
-                if isinstance(all_det, list) and len(all_det) > 1:
-                    for d in all_det[1:]:
+                if isinstance(all_det, list) and len(all_det) > 0:
+                    for d in all_det:
                         if isinstance(d, dict):
-                            sec_matches.append({
-                                "label": d.get("label", "Unknown Match"),
-                                "confidence": float(d.get("confidence") or 0.0),
-                                "source": d.get("source", "disease"),
-                            })
+                            lbl = d.get("label")
+                            if lbl and lbl != diag_name:
+                                c_raw = d.get("confidence")
+                                sec_matches.append({
+                                    "label": lbl,
+                                    "confidence": float(c_raw) if c_raw is not None else None,
+                                    "category": d.get("category") or "secondary",
+                                    "source": d.get("source") or d.get("provider") or "model",
+                                })
 
                 item_dict = {
                     "id": str(r.get("id")),
                     "created_at": r.get("created_at"),
                     "crop": r.get("crop") or "Unknown",
-                    "state": r.get("state") or "Andhra Pradesh",
-                    "district": r.get("district") or "Visakhapatnam",
+                    "state": r.get("state"),
+                    "district": r.get("district"),
                     "primary_diagnosis": diag_name,
                     "confidence": conf_val,
                     "secondary_matches": sec_matches,
-                    "status": r.get("status") or "reviewed",
-                    "severity": r.get("severity") or "Normal",
+                    "status": r.get("status"),
+                    "severity": r.get("severity"),
                     "identity_redacted": True,
                 }
                 items.append(item_dict)
 
             # 3. Calculate aggregate summary metrics across FULL filtered cohort
-            stats_query = admin_supabase.table("disease_prediction").select("crop, top_disease, top_pest, top_nutrient, top_disease_confidence")
+            stats_query = admin_supabase.table("disease_prediction").select("crop, primary_diagnosis, top_disease, top_pest, top_nutrient, confidence, top_disease_confidence")
             if crop and crop.strip(): stats_query = stats_query.ilike("crop", f"%{crop.strip()}%")
             if state and state.strip(): stats_query = stats_query.ilike("state", f"%{state.strip()}%")
             if district and district.strip(): stats_query = stats_query.ilike("district", f"%{district.strip()}%")
             if effective_status: stats_query = stats_query.eq("status", effective_status)
             if start_date: stats_query = stats_query.gte("created_at", start_date)
             if end_date: stats_query = stats_query.lte("created_at", end_date)
-            if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
+            if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,primary_diagnosis.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
 
             stats_res = stats_query.execute()
             stats_rows = stats_res.data or []
@@ -518,16 +526,18 @@ def get_all_diagnostics_for_admin(
                 c = sr.get("crop") or "Unknown"
                 by_crop[c] = by_crop.get(c, 0) + 1
 
-                d = sr.get("top_disease") or sr.get("top_pest") or sr.get("top_nutrient") or "Diagnosed"
+                d = sr.get("primary_diagnosis") or sr.get("top_disease") or sr.get("top_pest") or sr.get("top_nutrient") or "Unknown"
                 by_disease[d] = by_disease.get(d, 0) + 1
 
-                conf = float(sr.get("top_disease_confidence") or 0.0)
-                if conf >= 0.80:
-                    high_conf += 1
-                elif conf >= 0.50:
-                    med_conf += 1
-                else:
-                    low_conf += 1
+                conf_raw = sr.get("confidence") if sr.get("confidence") is not None else sr.get("top_disease_confidence")
+                if conf_raw is not None:
+                    conf = float(conf_raw)
+                    if conf >= 0.80:
+                        high_conf += 1
+                    elif conf >= 0.50:
+                        med_conf += 1
+                    else:
+                        low_conf += 1
 
             summary_metrics = {
                 "total_diagnoses": total,
