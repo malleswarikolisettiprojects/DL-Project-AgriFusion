@@ -318,9 +318,21 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     except Exception as exc:
         raise ValueError("The uploaded file is not a valid image.") from exc
 
-    crop_runs = [run_provider(config, pil_image, raw, content_type) for config in crop_configs]
-    pest_runs = [run_provider(config, pil_image, raw, content_type) for config in SHARED_MODELS["pest"]]
-    nutrient_runs = [run_provider(config, pil_image, raw, content_type) for config in SHARED_MODELS["nutrient"]]
+    import concurrent.futures
+    all_configs = crop_configs + SHARED_MODELS["pest"] + SHARED_MODELS["nutrient"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(all_configs) or 1) as executor:
+        future_map = {executor.submit(run_provider, cfg, pil_image, raw, content_type): cfg for cfg in all_configs}
+        results_by_config = {}
+        for future in concurrent.futures.as_completed(future_map):
+            cfg = future_map[future]
+            try:
+                results_by_config[id(cfg)] = future.result()
+            except Exception as p_err:
+                results_by_config[id(cfg)] = {"provider": cfg.get("provider", "unknown"), "status": "failed", "error": str(p_err), "detections": []}
+
+    crop_runs = [results_by_config.get(id(cfg), {}) for cfg in crop_configs]
+    pest_runs = [results_by_config.get(id(cfg), {}) for cfg in SHARED_MODELS["pest"]]
+    nutrient_runs = [results_by_config.get(id(cfg), {}) for cfg in SHARED_MODELS["nutrient"]]
 
     min_conf = CUSTOM_CROP_CONF_THRESHOLD if is_custom_crop else CONFIDENCE
     top_crop = best_result(crop_runs, min_conf=min_conf)
