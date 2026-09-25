@@ -51,11 +51,18 @@ def _get_db_connection():
     return conn
 
 
+_sources_db_initialized = False
+
+
 def init_sources_db():
     """Create knowledge_sources table and seed default verified sources if empty."""
+    global _sources_db_initialized
+    if _sources_db_initialized:
+        return
     conn = _get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS knowledge_sources (
             id                     TEXT PRIMARY KEY,
             title                  TEXT NOT NULL,
@@ -80,14 +87,14 @@ def init_sources_db():
             created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    conn.commit()
+        """)
+        conn.commit()
 
-    # Check if empty; seed canonical government sources if table is fresh
-    cursor.execute("SELECT COUNT(*) FROM knowledge_sources")
-    count = cursor.fetchone()[0]
-    if count == 0:
-        seed_sources = [
+        # Check if empty; seed canonical government sources if table is fresh
+        cursor.execute("SELECT COUNT(*) FROM knowledge_sources")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            seed_sources = [
             {
                 "id": "src-icar-01",
                 "title": "ICAR Crop Protection & Pest Management Handbook",
@@ -190,8 +197,9 @@ def init_sources_db():
                 s["needs_review"], json.dumps(s["caveats"])
             ))
         conn.commit()
-
-    conn.close()
+    finally:
+        conn.close()
+    _sources_db_initialized = True
 
 
 def fetch_knowledge_sources_list(
@@ -414,10 +422,12 @@ def register_knowledge_source(
 
     # Check for duplicate URL
     conn = _get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM knowledge_sources WHERE official_url = ?", (official_url,))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM knowledge_sources WHERE official_url = ?", (official_url,))
+        row = cursor.fetchone()
+    finally:
+        conn.close()
     if row:
         return False, "Duplicate official source URL already exists in registry."
 

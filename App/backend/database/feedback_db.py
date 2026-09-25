@@ -75,63 +75,65 @@ def init_feedback_db():
     if _feedback_db_initialized:
         return
     conn = _get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS farmer_feedback (
-            id                    TEXT PRIMARY KEY,
-            user_id               TEXT,
-            advisory_id           TEXT,
-            prediction_id         TEXT,
-            created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            rating                INTEGER NOT NULL,
-            category              TEXT NOT NULL,
-            feedback_type         TEXT,
-            module                TEXT,
-            crop                  TEXT,
-            district              TEXT,
-            state                 TEXT,
-            context_snapshot      TEXT,
-            message               TEXT NOT NULL,
-            language              TEXT DEFAULT 'English',
-            status                TEXT DEFAULT 'pending_review',
-            priority              TEXT DEFAULT 'normal',
-            assigned_to           TEXT,
-            admin_note_count      INTEGER DEFAULT 0,
-            resolved_at           TIMESTAMP,
-            resolved_by_admin_id  TEXT
-        )
-    """)
-    cursor.execute("PRAGMA table_info(farmer_feedback)")
-    cols = [col["name"] for col in cursor.fetchall()]
-    for col_name, col_def in [
-        ("assigned_to", "TEXT"),
-        ("user_id", "TEXT"),
-        ("module", "TEXT"),
-        ("prediction_id", "TEXT"),
-        ("crop", "TEXT"),
-        ("district", "TEXT"),
-        ("state", "TEXT"),
-        ("context_snapshot", "TEXT"),
-        ("feedback_type", "TEXT"),
-    ]:
-        if col_name not in cols:
-            try:
-                cursor.execute(f"ALTER TABLE farmer_feedback ADD COLUMN {col_name} {col_def}")
-            except Exception:
-                pass
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS farmer_feedback (
+                id                    TEXT PRIMARY KEY,
+                user_id               TEXT,
+                advisory_id           TEXT,
+                prediction_id         TEXT,
+                created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                rating                INTEGER NOT NULL,
+                category              TEXT NOT NULL,
+                feedback_type         TEXT,
+                module                TEXT,
+                crop                  TEXT,
+                district              TEXT,
+                state                 TEXT,
+                context_snapshot      TEXT,
+                message               TEXT NOT NULL,
+                language              TEXT DEFAULT 'English',
+                status                TEXT DEFAULT 'pending_review',
+                priority              TEXT DEFAULT 'normal',
+                assigned_to           TEXT,
+                admin_note_count      INTEGER DEFAULT 0,
+                resolved_at           TIMESTAMP,
+                resolved_by_admin_id  TEXT
+            )
+        """)
+        cursor.execute("PRAGMA table_info(farmer_feedback)")
+        cols = [col["name"] for col in cursor.fetchall()]
+        for col_name, col_def in [
+            ("assigned_to", "TEXT"),
+            ("user_id", "TEXT"),
+            ("module", "TEXT"),
+            ("prediction_id", "TEXT"),
+            ("crop", "TEXT"),
+            ("district", "TEXT"),
+            ("state", "TEXT"),
+            ("context_snapshot", "TEXT"),
+            ("feedback_type", "TEXT"),
+        ]:
+            if col_name not in cols:
+                try:
+                    cursor.execute(f"ALTER TABLE farmer_feedback ADD COLUMN {col_name} {col_def}")
+                except Exception:
+                    pass
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS feedback_review_notes (
-            id            TEXT PRIMARY KEY,
-            feedback_id   TEXT NOT NULL,
-            admin_user_id TEXT,
-            note          TEXT NOT NULL,
-            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
-    conn.commit()
-    conn.close()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS feedback_review_notes (
+                id            TEXT PRIMARY KEY,
+                feedback_id   TEXT NOT NULL,
+                admin_user_id TEXT,
+                note          TEXT NOT NULL,
+                created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+    finally:
+        conn.close()
     _feedback_db_initialized = True
 
 

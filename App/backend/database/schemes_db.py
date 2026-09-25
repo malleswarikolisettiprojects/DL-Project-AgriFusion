@@ -61,8 +61,9 @@ def init_schemes_db():
     if _schemes_db_initialized:
         return
     conn = _get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
         CREATE TABLE IF NOT EXISTS government_schemes (
             id                      TEXT PRIMARY KEY,
             scheme_name             TEXT NOT NULL,
@@ -91,16 +92,16 @@ def init_schemes_db():
             created_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at             TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
-    """)
-    conn.commit()
+        """)
+        conn.commit()
 
-    # Seed canonical schemes if empty
-    cursor.execute("SELECT COUNT(*) FROM government_schemes")
-    count = cursor.fetchone()[0]
-    if count == 0:
-        now_iso = datetime.now(timezone.utc).isoformat()
-        today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        seed_schemes = [
+        # Seed canonical schemes if empty
+        cursor.execute("SELECT COUNT(*) FROM government_schemes")
+        count = cursor.fetchone()[0]
+        if count == 0:
+            now_iso = datetime.now(timezone.utc).isoformat()
+            today_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            seed_schemes = [
             {
                 "id": "sch-pmkisan-01",
                 "scheme_name": "Pradhan Mantri Kisan Samman Nidhi (PM-KISAN)",
@@ -227,8 +228,8 @@ def init_schemes_db():
                 s["is_active"], s["needs_review"]
             ))
         conn.commit()
-
-    conn.close()
+    finally:
+        conn.close()
     _schemes_db_initialized = True
 
 
@@ -479,10 +480,12 @@ def register_government_scheme(
     init_schemes_db()
 
     conn = _get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT id FROM government_schemes WHERE official_portal = ?", (official_portal,))
-    row = cursor.fetchone()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM government_schemes WHERE official_portal = ?", (official_portal,))
+        row = cursor.fetchone()
+    finally:
+        conn.close()
     if row:
         return False, "Duplicate official portal URL already registered in scheme registry."
 
@@ -533,29 +536,31 @@ def register_government_scheme(
             pass
 
     conn = _get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO government_schemes (
-            id, scheme_name, scheme_type, state_relevance_json, district_relevance_json,
-            department, official_portal, source_title, source_organization, source_url,
-            verification_status, current_status, verified_date, last_checked_at,
-            verified_by_admin_id, verification_notes, benefit_summary, eligibility_summary,
-            required_documents_json, application_route, deadline, caveats_json,
-            is_active, needs_review, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        record["id"], record["scheme_name"], record["scheme_type"], record["state_relevance_json"],
-        record["district_relevance_json"], record["department"], record["official_portal"],
-        record["source_title"], record["source_organization"], record["source_url"],
-        record["verification_status"], record["current_status"], record["verified_date"],
-        record["last_checked_at"], record["verified_by_admin_id"], record["verification_notes"],
-        record["benefit_summary"], record["eligibility_summary"], record["required_documents_json"],
-        record["application_route"], record["deadline"], record["caveats_json"],
-        1 if record["is_active"] else 0, 1 if record["needs_review"] else 0,
-        record["created_at"], record["updated_at"]
-    ))
-    conn.commit()
-    conn.close()
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO government_schemes (
+                id, scheme_name, scheme_type, state_relevance_json, district_relevance_json,
+                department, official_portal, source_title, source_organization, source_url,
+                verification_status, current_status, verified_date, last_checked_at,
+                verified_by_admin_id, verification_notes, benefit_summary, eligibility_summary,
+                required_documents_json, application_route, deadline, caveats_json,
+                is_active, needs_review, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            record["id"], record["scheme_name"], record["scheme_type"], record["state_relevance_json"],
+            record["district_relevance_json"], record["department"], record["official_portal"],
+            record["source_title"], record["source_organization"], record["source_url"],
+            record["verification_status"], record["current_status"], record["verified_date"],
+            record["last_checked_at"], record["verified_by_admin_id"], record["verification_notes"],
+            record["benefit_summary"], record["eligibility_summary"], record["required_documents_json"],
+            record["application_route"], record["deadline"], record["caveats_json"],
+            1 if record["is_active"] else 0, 1 if record["needs_review"] else 0,
+            record["created_at"], record["updated_at"]
+        ))
+        conn.commit()
+    finally:
+        conn.close()
 
     res_obj = get_government_scheme_detail(scheme_id)
     return True, res_obj or record
