@@ -170,7 +170,7 @@ def test_save_to_prediction_records_skips_when_user_id_missing():
 # =============================================================================
 
 def test_admin_get_predictions_reads_from_ml_prediction_events(monkeypatch):
-    """Verify GET /api/v1/admin/predictions returns stored telemetry records."""
+    """Verify GET /api/v1/admin/predictions returns stored telemetry records but excludes disease diagnostics."""
     app.dependency_overrides[require_admin] = mock_admin_user
 
     mock_admin_c = MagicMock()
@@ -223,29 +223,54 @@ def test_admin_get_predictions_reads_from_ml_prediction_events(monkeypatch):
     assert res.status_code == 200
     data = res.json()
 
-    assert data.get("total") == 2
+    # Total and items must exclude disease_detection (count = 1)
+    assert data.get("total") == 1
     items = data.get("items", [])
-    assert len(items) == 2
+    assert len(items) == 1
 
-    # Verify real telemetry values are preserved
+    # Verify non-diagnostic telemetry values are preserved
     item0 = items[0]
     assert item0["model_type"] == "crop_recommendation"
     assert item0["crop"] == "Rice"
     assert item0["latency_ms"] == 120.5
     assert item0["user_id"] == "11111111-1111-1111-1111-111111111111"
 
-    item1 = items[1]
-    assert item1["model_type"] == "disease_detection"
-    assert item1["crop"] == "Cotton"
-    assert item1["latency_ms"] == 350.0
-    assert item1["user_id"] is None
-
-    # Analytics summary metrics
+    # Analytics summary metrics exclude disease_detection
     analytics = data.get("analytics", {})
-    assert analytics.get("total_predictions") == 2
-    assert analytics.get("success_count") == 2
+    assert analytics.get("total_predictions") == 1
+    assert analytics.get("success_count") == 1
     assert analytics.get("error_count") == 0
-    assert analytics.get("average_latency_ms") == round((120.5 + 350.0) / 2, 2)
+    assert analytics.get("average_latency_ms") == 120.5
+    assert "disease_detection" not in analytics.get("by_type", {})
+
+
+def test_admin_predictions_excludes_disease_diagnostics_query(monkeypatch):
+    """Verify querying model_type=disease_detection on /api/v1/admin/predictions returns total: 0."""
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    mock_admin_c = MagicMock()
+    mock_execute = MagicMock()
+    mock_execute.execute.return_value.data = [
+        {
+            "id": "22222222-3333-4444-5555-666666666666",
+            "model_type": "disease_detection",
+            "crop": "Cotton",
+            "status": "success"
+        }
+    ]
+    mock_admin_c.table.return_value.select.return_value = mock_execute
+    mock_execute.ilike.return_value = mock_execute
+    mock_execute.order.return_value = mock_execute
+
+    monkeypatch.setattr("App.backend.database.save_predictions._get_admin_client", lambda: mock_admin_c)
+
+    res = client.get("/api/v1/admin/predictions?model_type=disease_detection")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total"] == 0
+    assert data["items"] == []
+    assert data["analytics"]["total_predictions"] == 0
+
 
 
 def test_admin_get_predictions_fails_closed_on_db_error(monkeypatch):

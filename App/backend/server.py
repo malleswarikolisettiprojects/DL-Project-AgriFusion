@@ -253,13 +253,36 @@ FeedbackModule = Literal[
 ]
 
 
+FeedbackType = Literal["helpful", "not_helpful", "problem_report"]
+
+
 class CreateFeedbackRequest(BaseModel):
     advisory_id: Optional[str] = Field(None, example="adv-101")
+    prediction_id: Optional[str] = Field(None, example="pred-202")
+    feedback_type: Optional[FeedbackType] = Field(
+        None,
+        example="not_helpful",
+        description="Whether the farmer found the AI advice helpful, not helpful, or is reporting a problem.",
+    )
     rating: int = Field(..., ge=1, le=5, example=4)
     category: FeedbackCategory = Field(..., example="incorrect_answer")
     module: Optional[str] = Field(None, example="irrigation")
+    crop: Optional[str] = Field(None, example="Paddy")
+    district: Optional[str] = Field(None, example="Guntur")
+    state: Optional[str] = Field(None, example="Andhra Pradesh")
     message: str = Field(..., min_length=1, max_length=2000, example="The advisory response did not include dosage information.")
     language: Optional[str] = Field("English", example="English")
+    query_summary: Optional[str] = Field(None, example="Paddy pest control")
+    ai_answer: Optional[str] = Field(None, example="Use Neem oil 5ml/L")
+    relevant_details: Optional[Dict[str, Any]] = Field(None)
+    context_snapshot: Optional[Dict[str, Any]] = Field(
+        None,
+        example={
+            "question_summary": "Paddy pest control",
+            "ai_answer": "Use Neem oil 5ml/L",
+            "relevant_details": {"diagnosis": "Stem borer", "crop": "Paddy"},
+        },
+    )
 
 
 # Base Endpoints
@@ -1096,15 +1119,42 @@ def api_submit_feedback(
     """
     Farmer Feedback Submission Endpoint.
     Stores farmer feedback securely without exposing sensitive personal data.
+    Accepts structured context so admins can understand what advice was rated.
     """
     try:
         user_id = current_user.id if current_user else None
+
+        # Validate module against known values; accept None/unknown without error.
+        valid_modules = {
+            "crop_recommendation", "climate", "irrigation", "yield",
+            "disease_diagnosis", "advisory", "schemes", "general",
+        }
+        module_val = req.module.strip().lower() if req.module else None
+        if module_val and module_val not in valid_modules:
+            module_val = None  # don't persist unknown module codes
+
+        ctx_snap = req.context_snapshot
+        if ctx_snap is None and (req.query_summary or req.ai_answer or req.relevant_details):
+            ctx_snap = {}
+            if req.query_summary:
+                ctx_snap["question_summary"] = req.query_summary
+            if req.ai_answer:
+                ctx_snap["ai_answer"] = req.ai_answer
+            if req.relevant_details:
+                ctx_snap["relevant_details"] = req.relevant_details
+
         record = create_farmer_feedback(
             rating=req.rating,
             category=req.category,
             message=req.message,
+            feedback_type=req.feedback_type,
             advisory_id=req.advisory_id,
-            module=req.module,
+            prediction_id=req.prediction_id,
+            module=module_val,
+            crop=req.crop,
+            district=req.district,
+            state=req.state,
+            context_snapshot=ctx_snap,
             language=req.language,
             user_id=user_id,
         )

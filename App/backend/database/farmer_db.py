@@ -757,6 +757,29 @@ def update_user_preferences(user_id: str, prefs: Dict[str, Any]) -> Dict[str, An
     return record
 
 
+DIAGNOSTIC_MODEL_TYPES = {
+    "disease_detection",
+    "disease",
+    "pest",
+    "disease_pest",
+    "crop_disease",
+    "disease_diagnosis",
+    "diagnostics",
+    "disease_and_pest",
+    "pest_detection",
+    "nutrient_diagnosis",
+    "crop_diagnostics",
+}
+
+def _is_diagnostic_model_type(model_type: Optional[str]) -> bool:
+    if not model_type:
+        return False
+    mt = str(model_type).strip().lower()
+    if mt in DIAGNOSTIC_MODEL_TYPES:
+        return True
+    return any(k in mt for k in ("disease", "pest", "diagnostic", "nutrient_diagnosis"))
+
+
 # -----------------------------------------------------------------------------
 # 8. ML Predictions Activity Log (System Telemetry Reader for Admin)
 # -----------------------------------------------------------------------------
@@ -775,6 +798,7 @@ def get_ml_predictions_for_admin(
 ) -> dict:
     """
     Fetch ML prediction activity records and summary metrics from public.ml_prediction_events.
+    Excludes disease/pest image diagnostic events (which are managed under Crop Diagnostics Audit).
     Supports filtering, pagination, search, accurate total count, and cohort aggregate metrics.
     Fails closed with RuntimeError on database errors.
     """
@@ -803,21 +827,40 @@ def get_ml_predictions_for_admin(
             "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from system event ledgers.",
         }
 
+    target_model = model_type or prediction_type
+    if target_model and _is_diagnostic_model_type(target_model):
+        return {
+            "items": [],
+            "page": page,
+            "page_size": page_size,
+            "total": 0,
+            "analytics": {
+                "total_predictions": 0,
+                "success_count": 0,
+                "error_count": 0,
+                "average_latency_ms": None,
+                "by_type": {},
+                "by_crop": {},
+                "by_status": {},
+                "trends": [],
+            },
+            "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from system event ledgers.",
+        }
+
     try:
         base_query = admin_client.table("ml_prediction_events").select("*", count="exact")
 
-        target_model = model_type or prediction_type
         if target_model:
             tm = target_model.strip().lower()
             alias_map = {
                 "crop": "crop_recommendation",
+                "climate": "climate_risk",
                 "irrigation": "irrigation_scheduling",
                 "irrigation_schedule": "irrigation_scheduling",
                 "yield": "yield_prediction",
                 "yield_forecast": "yield_prediction",
                 "market": "market_price_forecasting",
                 "market_price": "market_price_forecasting",
-                "disease": "disease_detection",
             }
             mapped_model = alias_map.get(tm, tm)
             base_query = base_query.ilike("model_type", f"%{mapped_model}%")
@@ -842,8 +885,10 @@ def get_ml_predictions_for_admin(
         if full_res.data is None:
             raise RuntimeError("Database query returned null response for ml_prediction_events")
 
-        cohort_records = full_res.data
-        total_count = full_res.count if full_res.count is not None else len(cohort_records)
+        raw_records = full_res.data
+        # Exclude disease/pest image diagnostic model events from ML Predictions Activity log
+        cohort_records = [r for r in raw_records if not _is_diagnostic_model_type(r.get("model_type"))]
+        total_count = len(cohort_records)
 
         offset = (page - 1) * page_size
         if total_count == 0 or offset >= total_count:

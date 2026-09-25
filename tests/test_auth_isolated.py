@@ -344,7 +344,8 @@ def test_admin_add_advisory_note(mock_verify):
     assert data["status"] == "success"
 
 
-def test_submit_farmer_feedback():
+@patch("App.backend.database.feedback_db._is_supabase_active", return_value=False)
+def test_submit_farmer_feedback(mock_supa):
     response = client.post(
         "/api/v1/feedback",
         json={
@@ -374,8 +375,9 @@ def test_admin_get_feedback_normal_user(mock_verify):
     assert response.status_code == 403
 
 
+@patch("App.backend.database.feedback_db._is_supabase_active", return_value=False)
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
-def test_admin_feedback_workflow(mock_verify):
+def test_admin_feedback_workflow(mock_verify, mock_supa):
     # 1. Submit feedback
     fb_res = client.post(
         "/api/v1/feedback",
@@ -483,8 +485,9 @@ def test_admin_get_sources_normal_user(mock_verify):
     assert res.status_code == 403
 
 
+@patch("App.backend.database.sources_db._is_supabase_active", return_value=False)
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
-def test_admin_sources_workflow(mock_verify):
+def test_admin_sources_workflow(mock_verify, mock_supa):
     import uuid
     token = generate_test_jwt(user_id="adm-src-1", role="admin")
     headers = {"Authorization": f"Bearer {token}"}
@@ -567,8 +570,9 @@ def test_admin_get_schemes_normal_user(mock_verify):
     assert res.status_code == 403
 
 
+@patch("App.backend.database.schemes_db._is_supabase_active", return_value=False)
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
-def test_admin_schemes_workflow(mock_verify):
+def test_admin_schemes_workflow(mock_verify, mock_supa):
     import uuid
     token = generate_test_jwt(user_id="adm-sch-1", role="admin")
     headers = {"Authorization": f"Bearer {token}"}

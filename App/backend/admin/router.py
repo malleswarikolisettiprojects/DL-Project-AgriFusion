@@ -409,11 +409,18 @@ FeedbackPriority = Literal["low", "normal", "high", "urgent"]
 class AdminFeedbackItem(BaseModel):
     id: str
     advisory_id: Optional[str] = None
+    prediction_id: Optional[str] = None
     created_at: Optional[str] = None
     rating: int
+    feedback_type: Optional[str] = None          # helpful | not_helpful | problem_report
     category: str
     module: Optional[str] = None
+    crop: Optional[str] = None
+    district: Optional[str] = None
+    state: Optional[str] = None
+    comment: Optional[str] = None                # alias for message
     message: str
+    context_snapshot: Optional[Dict[str, Any]] = None
     language: Optional[str] = "English"
     status: FeedbackStatus
     priority: FeedbackPriority
@@ -1182,8 +1189,10 @@ async def get_admin_feedback_list(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     status: Optional[str] = None,
+    feedback_type: Optional[str] = None,
     category: Optional[str] = None,
     module: Optional[str] = None,
+    crop: Optional[str] = None,
     priority: Optional[str] = None,
     rating: Optional[int] = None,
     assigned_to: Optional[str] = None,
@@ -1200,7 +1209,7 @@ async def get_admin_feedback_list(
             admin_user_id=admin_user.id,
             action="feedback_list_viewed",
             target_type="farmer_feedback",
-            safe_metadata={"page": page, "page_size": page_size, "status": status, "module": module, "priority": priority, "assigned_to": assigned_to},
+            safe_metadata={"page": page, "page_size": page_size, "status": status, "module": module, "crop": crop, "priority": priority, "assigned_to": assigned_to, "feedback_type": feedback_type},
         )
     except Exception as exc:
         logger.warning(f"Audit log failed during feedback list view: {exc}")
@@ -1209,8 +1218,10 @@ async def get_admin_feedback_list(
         page=page,
         page_size=page_size,
         status=status,
+        feedback_type=feedback_type,
         category=category,
         module=module,
+        crop=crop,
         priority=priority,
         rating=rating,
         assigned_to=assigned_to,
@@ -1219,6 +1230,7 @@ async def get_admin_feedback_list(
         search=search,
     )
     return data
+
 
 
 @admin_router.get("/feedback/{feedback_id}")

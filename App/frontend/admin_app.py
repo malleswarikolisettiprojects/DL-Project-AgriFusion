@@ -240,7 +240,7 @@ elif menu == "🤖 ML Predictions Activity":
 
     p_col1, p_col2, p_col3, p_col4 = st.columns(4)
     with p_col1:
-        pred_model_f = st.selectbox("Model Type", ["All", "crop_recommendation", "irrigation_scheduling", "yield_prediction", "market_price_forecasting", "disease_detection"])
+        pred_model_f = st.selectbox("Model Type", ["All", "crop_recommendation", "climate_risk", "irrigation_scheduling", "yield_prediction", "market_price_forecasting"])
     with p_col2:
         pred_state_f = st.selectbox("State Filter", ["All", "Andhra Pradesh", "Telangana", "Karnataka", "Punjab", "Maharashtra", "Tamil Nadu"])
     with p_col3:

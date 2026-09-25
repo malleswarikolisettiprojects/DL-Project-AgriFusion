@@ -33,8 +33,20 @@ def _get_supabase():
     return _supabase
 
 
+def _is_supabase_active() -> bool:
+    try:
+        from App.backend.settings import SUPABASE_URL, SUPABASE_KEY
+        return bool(SUPABASE_URL and SUPABASE_KEY)
+    except Exception:
+        return False
+
+
 def _get_db_connection():
     conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")
+    except Exception:
+        pass
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -404,8 +416,9 @@ def register_knowledge_source(
     conn = _get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM knowledge_sources WHERE official_url = ?", (official_url,))
-    if cursor.fetchone():
-        conn.close()
+    row = cursor.fetchone()
+    conn.close()
+    if row:
         return False, "Duplicate official source URL already exists in registry."
 
     source_id = f"src-{uuid.uuid4().hex[:10]}"
@@ -449,6 +462,8 @@ def register_knowledge_source(
         except Exception:
             pass
 
+    conn = _get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO knowledge_sources (
             id, title, organization, source_type, subject, crop, state_relevance_json,

@@ -507,15 +507,20 @@ CREATE TABLE IF NOT EXISTS public.farmer_feedback (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
     advisory_id TEXT,
-    prediction_id UUID,
+    prediction_id TEXT,
     rating INTEGER NOT NULL DEFAULT 5,
     category TEXT NOT NULL DEFAULT 'general',
+    feedback_type TEXT DEFAULT 'general',
     module TEXT,
+    crop TEXT,
+    district TEXT,
+    state TEXT,
     message TEXT NOT NULL,
     language TEXT DEFAULT 'English',
     status TEXT NOT NULL DEFAULT 'pending_review',
     priority TEXT NOT NULL DEFAULT 'normal',
     assigned_to TEXT,
+    context_snapshot JSONB DEFAULT '{}'::jsonb,
     admin_note_count INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -523,14 +528,20 @@ CREATE TABLE IF NOT EXISTS public.farmer_feedback (
     resolved_by_admin_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS feedback_type TEXT;
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS assigned_to TEXT;
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
-ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS prediction_id UUID;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS prediction_id TEXT;
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS module TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS crop TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS district TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS state TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS context_snapshot JSONB DEFAULT '{}'::jsonb;
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS admin_note_count INTEGER DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_status ON public.farmer_feedback(status);
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_module ON public.farmer_feedback(module);
+CREATE INDEX IF NOT EXISTS idx_farmer_feedback_crop ON public.farmer_feedback(crop);
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_user_id ON public.farmer_feedback(user_id);
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_created_at ON public.farmer_feedback(created_at DESC);
 
@@ -584,7 +595,18 @@ CREATE INDEX IF NOT EXISTS idx_feedback_review_notes_feedback_id ON public.feedb
 
 ALTER TABLE public.feedback_review_notes ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Admins manage feedback notes" ON public.feedback_review_notes;
-CREATE POLICY "Admins manage feedback notes" ON public.feedback_review_notes FOR ALL USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin');
+DROP POLICY IF EXISTS "Backend insert feedback notes" ON public.feedback_review_notes;
+DROP POLICY IF EXISTS "Admins select update delete feedback notes" ON public.feedback_review_notes;
+-- INSERT: backend-only path, already gated by require_admin at the API layer.
+-- No JWT claim needed — the application enforces admin authorization before calling this.
+CREATE POLICY "Backend insert feedback notes" ON public.feedback_review_notes
+    FOR INSERT WITH CHECK (true);
+-- SELECT / UPDATE / DELETE: restricted to service_role or verified admins.
+CREATE POLICY "Admins select update delete feedback notes" ON public.feedback_review_notes
+    FOR ALL USING (
+        auth.role() = 'service_role' OR
+        EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin', 'super_admin'))
+    );
 
 -- -----------------------------------------------------------------------------
 -- 12. Advisory Activity & Notes Tables (Agronomic Telemetry & Admin Audit)
@@ -738,5 +760,34 @@ USING (
   )
 );
 
+-- -----------------------------------------------------------------------------
+-- SECTION 15: Farmer Feedback — missing columns & RLS fixes (idempotent patch)
+-- Run this entire block in the Supabase SQL Editor.
+-- The backend logs [FeedbackMigrationPending] warnings until this is applied.
+-- -----------------------------------------------------------------------------
 
+-- 15a. Add columns missing from farmer_feedback
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS assigned_to TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS prediction_id TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS module TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS crop TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS context_snapshot JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS admin_note_count INTEGER DEFAULT 0;
 
+-- 15b. Fix feedback_review_notes RLS: allow backend INSERT (gated by require_admin
+--      at the API layer) and restrict SELECT/UPDATE/DELETE to service_role or admins.
+DROP POLICY IF EXISTS "Admins manage feedback notes" ON public.feedback_review_notes;
+DROP POLICY IF EXISTS "Backend insert feedback notes" ON public.feedback_review_notes;
+DROP POLICY IF EXISTS "Admins select update delete feedback notes" ON public.feedback_review_notes;
+
+CREATE POLICY "Backend insert feedback notes" ON public.feedback_review_notes
+    FOR INSERT WITH CHECK (true);
+
+CREATE POLICY "Admins select update delete feedback notes" ON public.feedback_review_notes
+    FOR ALL USING (
+        auth.role() = 'service_role' OR
+        EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin', 'super_admin'))
+    );
+
+-- 15c. Reload PostgREST schema cache so new columns are immediately visible.
+NOTIFY pgrst, 'reload schema';

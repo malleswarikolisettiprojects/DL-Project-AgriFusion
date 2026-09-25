@@ -35,7 +35,12 @@ def _get_supabase():
 
 
 def _get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA busy_timeout=30000;")
+    except Exception:
+        pass
     conn.row_factory = sqlite3.Row
     return conn
 

@@ -34,14 +34,32 @@ def _get_supabase():
     return _supabase
 
 
+def _is_supabase_active() -> bool:
+    try:
+        from App.backend.settings import SUPABASE_URL, SUPABASE_KEY
+        return bool(SUPABASE_URL and SUPABASE_KEY)
+    except Exception:
+        return False
+
+
 def _get_db_connection():
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    try:
+        conn.execute("PRAGMA busy_timeout = 30000;")
+    except Exception:
+        pass
     conn.row_factory = sqlite3.Row
     return conn
 
 
+_schemes_db_initialized = False
+
+
 def init_schemes_db():
     """Create government_schemes table and seed default verified schemes if empty."""
+    global _schemes_db_initialized
+    if _schemes_db_initialized:
+        return
     conn = _get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -211,6 +229,7 @@ def init_schemes_db():
         conn.commit()
 
     conn.close()
+    _schemes_db_initialized = True
 
 
 def fetch_government_schemes_list(
@@ -462,8 +481,9 @@ def register_government_scheme(
     conn = _get_db_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM government_schemes WHERE official_portal = ?", (official_portal,))
-    if cursor.fetchone():
-        conn.close()
+    row = cursor.fetchone()
+    conn.close()
+    if row:
         return False, "Duplicate official portal URL already registered in scheme registry."
 
     scheme_id = f"sch-{uuid.uuid4().hex[:10]}"
@@ -512,6 +532,8 @@ def register_government_scheme(
         except Exception:
             pass
 
+    conn = _get_db_connection()
+    cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO government_schemes (
             id, scheme_name, scheme_type, state_relevance_json, district_relevance_json,
