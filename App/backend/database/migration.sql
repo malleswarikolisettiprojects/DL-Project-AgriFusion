@@ -510,6 +510,7 @@ CREATE TABLE IF NOT EXISTS public.farmer_feedback (
     prediction_id UUID,
     rating INTEGER NOT NULL DEFAULT 5,
     category TEXT NOT NULL DEFAULT 'general',
+    module TEXT,
     message TEXT NOT NULL,
     language TEXT DEFAULT 'English',
     status TEXT NOT NULL DEFAULT 'pending_review',
@@ -525,9 +526,11 @@ CREATE TABLE IF NOT EXISTS public.farmer_feedback (
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS assigned_to TEXT;
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS prediction_id UUID;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS module TEXT;
 ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS admin_note_count INTEGER DEFAULT 0;
 
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_status ON public.farmer_feedback(status);
+CREATE INDEX IF NOT EXISTS idx_farmer_feedback_module ON public.farmer_feedback(module);
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_user_id ON public.farmer_feedback(user_id);
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_created_at ON public.farmer_feedback(created_at DESC);
 

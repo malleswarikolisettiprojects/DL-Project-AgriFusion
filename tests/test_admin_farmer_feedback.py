@@ -128,10 +128,11 @@ def test_feedback_db_error_handling():
 
 
 def test_api_submit_feedback_endpoint():
-    """Test POST /api/v1/feedback endpoint success."""
+    """Test POST /api/v1/feedback endpoint success with module."""
     payload = {
         "rating": 5,
         "category": "other",
+        "module": "irrigation",
         "message": "API feedback submission test message",
         "advisory_id": "adv-999",
         "language": "Hindi"
@@ -143,6 +144,29 @@ def test_api_submit_feedback_endpoint():
         assert res_json["success"] is True
         assert "feedback_id" in res_json
         assert len(res_json["feedback_id"]) == 36
+
+
+def test_create_and_filter_farmer_feedback_by_module():
+    """Test creating feedback with module and verifying module filter returns only matching records."""
+    with patch("App.backend.database.feedback_db._is_supabase_active", return_value=False):
+        unique_msg = f"Irrigation water schedule test {uuid.uuid4().hex[:6]}"
+        res = create_farmer_feedback(
+            rating=5,
+            category="missing_information",
+            message=unique_msg,
+            module="irrigation",
+            user_id=None
+        )
+        assert res["module"] == "irrigation"
+
+        # Verify module filter returns this record
+        irrig_list = fetch_farmer_feedback_list(module="irrigation")
+        assert irrig_list["total"] >= 1
+        assert any(item["message"] == unique_msg and item["module"] == "irrigation" for item in irrig_list["items"])
+
+        # Verify filtering by another module (e.g. climate) does not include this record
+        climate_list = fetch_farmer_feedback_list(module="climate")
+        assert not any(item["message"] == unique_msg for item in climate_list["items"])
 
 
 def test_admin_feedback_anonymous_access_denied():

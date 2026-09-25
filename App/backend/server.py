@@ -241,11 +241,23 @@ FeedbackCategory = Literal[
     "other",
 ]
 
+FeedbackModule = Literal[
+    "crop_recommendation",
+    "climate",
+    "irrigation",
+    "yield",
+    "disease_diagnosis",
+    "advisory",
+    "schemes",
+    "general",
+]
+
 
 class CreateFeedbackRequest(BaseModel):
     advisory_id: Optional[str] = Field(None, example="adv-101")
     rating: int = Field(..., ge=1, le=5, example=4)
     category: FeedbackCategory = Field(..., example="incorrect_answer")
+    module: Optional[str] = Field(None, example="irrigation")
     message: str = Field(..., min_length=1, max_length=2000, example="The advisory response did not include dosage information.")
     language: Optional[str] = Field("English", example="English")
 
@@ -1092,6 +1104,7 @@ def api_submit_feedback(
             category=req.category,
             message=req.message,
             advisory_id=req.advisory_id,
+            module=req.module,
             language=req.language,
             user_id=user_id,
         )

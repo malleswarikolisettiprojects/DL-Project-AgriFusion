@@ -499,17 +499,76 @@ elif menu == "🏛️ Government Schemes Registry":
 elif menu == "💬 Farmer Feedback & Support":
     st.header("💬 Farmer Feedback Reports & Review Dashboard")
 
+    MODULE_LABELS = {
+        "crop_recommendation": "Crop Recommendation",
+        "climate": "Climate Risk",
+        "irrigation": "Irrigation",
+        "yield": "Yield Prediction",
+        "disease_diagnosis": "Disease Diagnostics",
+        "advisory": "Agronomy Advisory",
+        "schemes": "Government Schemes",
+        "general": "General System",
+    }
+
+    def get_friendly_module_label(module_code):
+        if not module_code:
+            return "Not specified"
+        clean = str(module_code).strip().lower()
+        return MODULE_LABELS.get(clean, clean.replace("_", " ").title())
+
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        mod_filter = st.selectbox(
+            "Module Filter",
+            ["All", "irrigation", "crop_recommendation", "climate", "yield", "disease_diagnosis", "advisory", "schemes", "general"]
+        )
+    with col2:
+        cat_filter = st.selectbox(
+            "Category Filter",
+            ["All", "incorrect_answer", "missing_information", "outdated_source", "wrong_language", "unclear_advice", "image_quality_problem", "technical_error", "other"]
+        )
+    with col3:
+        status_filter = st.selectbox(
+            "Status Filter",
+            ["All", "pending_review", "under_review", "resolved", "rejected", "reviewed"]
+        )
+    with col4:
+        rating_filter = st.selectbox(
+            "Rating Filter",
+            ["All", "5", "4", "3", "2", "1"]
+        )
+
+    params = {"page": 1, "page_size": 50}
+    if mod_filter != "All":
+        params["module"] = mod_filter
+    if cat_filter != "All":
+        params["category"] = cat_filter
+    if status_filter != "All":
+        params["status"] = status_filter
+    if rating_filter != "All":
+        params["rating"] = int(rating_filter)
+
     try:
-        res = requests.get(f"{API_BASE_URL}/api/v1/admin/feedback", headers=get_headers()).json()
+        res = requests.get(f"{API_BASE_URL}/api/v1/admin/feedback", headers=get_headers(), params=params, timeout=10).json()
         reports = res.get("items", [])
+        total = res.get("total", len(reports))
+        st.subheader(f"Feedback Reports: {total}")
 
         if reports:
             for f in reports:
-                with st.expander(f"⭐ Rating {f.get('rating')}/5 — {f.get('category')} ({f.get('status')})"):
+                mod_code = f.get("module")
+                friendly_mod = get_friendly_module_label(mod_code)
+                cat_val = f.get("category") or "other"
+                rat_val = f.get("rating")
+                stat_val = f.get("status") or "pending_review"
+
+                with st.expander(f"⭐ Rating {rat_val}/5 — Module: {friendly_mod} | Category: {cat_val} ({stat_val})"):
+                    st.write(f"**Module:** `{friendly_mod}` ({mod_code or 'Not specified'})")
+                    st.write(f"**Category:** `{cat_val}`")
                     st.write(f"**Farmer Comment:** {f.get('comment') or f.get('message')}")
                     st.write(f"**Date:** {f.get('created_at')} | **Priority:** `{f.get('priority')}`")
         else:
-            st.info("No farmer feedback reports submitted yet.")
+            st.info("No farmer feedback reports match the selected filters.")
     except Exception as err:
         st.error(f"Failed to fetch farmer feedback: {err}")
 

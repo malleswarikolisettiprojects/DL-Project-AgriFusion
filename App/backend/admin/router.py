@@ -412,6 +412,7 @@ class AdminFeedbackItem(BaseModel):
     created_at: Optional[str] = None
     rating: int
     category: str
+    module: Optional[str] = None
     message: str
     language: Optional[str] = "English"
     status: FeedbackStatus
@@ -434,6 +435,7 @@ class UpdateFeedbackRequest(BaseModel):
     status: Optional[FeedbackStatus] = None
     priority: Optional[FeedbackPriority] = None
     assigned_to: Optional[str] = None
+    module: Optional[str] = None
 
 
 class AddFeedbackReviewNoteRequest(BaseModel):
@@ -1181,6 +1183,7 @@ async def get_admin_feedback_list(
     page_size: int = Query(25, ge=1, le=100),
     status: Optional[str] = None,
     category: Optional[str] = None,
+    module: Optional[str] = None,
     priority: Optional[str] = None,
     rating: Optional[int] = None,
     assigned_to: Optional[str] = None,
@@ -1197,7 +1200,7 @@ async def get_admin_feedback_list(
             admin_user_id=admin_user.id,
             action="feedback_list_viewed",
             target_type="farmer_feedback",
-            safe_metadata={"page": page, "page_size": page_size, "status": status, "priority": priority, "assigned_to": assigned_to},
+            safe_metadata={"page": page, "page_size": page_size, "status": status, "module": module, "priority": priority, "assigned_to": assigned_to},
         )
     except Exception as exc:
         logger.warning(f"Audit log failed during feedback list view: {exc}")
@@ -1207,6 +1210,7 @@ async def get_admin_feedback_list(
         page_size=page_size,
         status=status,
         category=category,
+        module=module,
         priority=priority,
         rating=rating,
         assigned_to=assigned_to,

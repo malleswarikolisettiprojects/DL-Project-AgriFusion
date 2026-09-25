@@ -369,13 +369,14 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 #### `POST /api/v1/feedback`
 - **Auth**: Optional User
 - **Read/Write**: Write (`public.farmer_feedback`)
-- **Request Body**: `{"rating": 5, "category": "incorrect_answer", "message": "Clear advice."}`
+- **Request Body**: `{"rating": 5, "category": "incorrect_answer", "module": "irrigation", "message": "Clear advice."}`
 - **Success Response (HTTP 200 OK)**:
   ```json
   {
-    "status": "success",
-    "id": "fb-9a8b7c6d",
-    "message": "Feedback submitted successfully."
+    "success": true,
+    "stage": "feedback",
+    "message": "Feedback submitted successfully",
+    "feedback_id": "fb-9a8b7c6d"
   }
   ```
 
@@ -676,7 +677,7 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 - **`DELETE /api/v1/admin/schemes/{scheme_id}`**: Remove scheme record.
 
 #### 8. Feedback & Review Queue Page (`GET /api/v1/admin/feedback`)
-- **`GET /api/v1/admin/feedback`**: Paginated farmer feedback list with rating distribution. Filters: `status`, `category`, `priority`, `rating`, `assigned_to`, `start_date`, `end_date`, `search`.
+- **`GET /api/v1/admin/feedback`**: Paginated farmer feedback list with rating distribution. Filters: `status`, `category`, `module`, `priority`, `rating`, `assigned_to`, `start_date`, `end_date`, `search`.
 - **`GET /api/v1/admin/feedback/{feedback_id}`**: Detail view with note history and compliance checks.
 - **`PATCH /api/v1/admin/feedback/{feedback_id}`**: Update status, priority, or `assigned_to` reviewer.
 - **`POST /api/v1/admin/feedback/{feedback_id}/note`**: Attach review note.

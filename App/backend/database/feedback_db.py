@@ -74,6 +74,7 @@ def init_feedback_db():
             updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             rating                INTEGER NOT NULL,
             category              TEXT NOT NULL,
+            module                TEXT,
             message               TEXT NOT NULL,
             language              TEXT DEFAULT 'English',
             status                TEXT DEFAULT 'pending_review',
@@ -94,6 +95,11 @@ def init_feedback_db():
     if "user_id" not in cols:
         try:
             cursor.execute("ALTER TABLE farmer_feedback ADD COLUMN user_id TEXT")
+        except Exception:
+            pass
+    if "module" not in cols:
+        try:
+            cursor.execute("ALTER TABLE farmer_feedback ADD COLUMN module TEXT")
         except Exception:
             pass
 
@@ -122,6 +128,7 @@ def create_farmer_feedback(
     category: str,
     message: str,
     advisory_id: Optional[str] = None,
+    module: Optional[str] = None,
     language: Optional[str] = "English",
     user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
@@ -138,6 +145,7 @@ def create_farmer_feedback(
         "updated_at": created_at,
         "rating": rating,
         "category": category,
+        "module": module,
         "message": clean_msg,
         "language": language or "English",
         "status": "pending_review",
@@ -171,12 +179,12 @@ def create_farmer_feedback(
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO farmer_feedback (
-            id, user_id, advisory_id, created_at, updated_at, rating, category, message,
+            id, user_id, advisory_id, created_at, updated_at, rating, category, module, message,
             language, status, priority, admin_note_count, resolved_at, resolved_by_admin_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         record["id"], record["user_id"], record["advisory_id"], record["created_at"], record["updated_at"],
-        record["rating"], record["category"], record["message"], record["language"],
+        record["rating"], record["category"], record["module"], record["message"], record["language"],
         record["status"], record["priority"], record["admin_note_count"],
         record["resolved_at"], record["resolved_by_admin_id"]
     ))
@@ -191,6 +199,7 @@ def fetch_farmer_feedback_list(
     page_size: int = 25,
     status: Optional[str] = None,
     category: Optional[str] = None,
+    module: Optional[str] = None,
     priority: Optional[str] = None,
     rating: Optional[int] = None,
     assigned_to: Optional[str] = None,
@@ -214,6 +223,8 @@ def fetch_farmer_feedback_list(
                 q = q.eq("status", status)
             if category:
                 q = q.eq("category", category)
+            if module:
+                q = q.eq("module", module)
             if priority:
                 q = q.eq("priority", priority)
             if rating:
@@ -246,6 +257,9 @@ def fetch_farmer_feedback_list(
             if category:
                 query += " AND category = ?"
                 params.append(category)
+            if module:
+                query += " AND module = ?"
+                params.append(module)
             if priority:
                 query += " AND priority = ?"
                 params.append(priority)
@@ -277,7 +291,8 @@ def fetch_farmer_feedback_list(
             s_lower = search.lower()
             msg = str(r.get("message") or "").lower()
             cat = str(r.get("category") or "").lower()
-            if s_lower not in msg and s_lower not in cat:
+            mod_val = str(r.get("module") or "").lower()
+            if s_lower not in msg and s_lower not in cat and s_lower not in mod_val:
                 continue
         filtered.append(r)
 
@@ -298,6 +313,7 @@ def fetch_farmer_feedback_list(
             "created_at": r.get("created_at"),
             "rating": r.get("rating"),
             "category": r.get("category"),
+            "module": r.get("module"),
             "message": r.get("message"),
             "language": r.get("language") or "English",
             "status": r.get("status") or "pending_review",
