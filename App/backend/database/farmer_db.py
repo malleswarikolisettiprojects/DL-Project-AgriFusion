@@ -444,13 +444,20 @@ def get_all_diagnostics_for_admin(
                 s_term = search.strip()
                 query = query.or_(f"crop.ilike.%{s_term}%,top_disease.ilike.%{s_term}%,state.ilike.%{s_term}%,district.ilike.%{s_term}%")
 
-            res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
-            if res.data is None:
-                logger.error("Supabase disease_prediction query returned None data")
-                raise RuntimeError("Database query failed for admin diagnostics")
-
-            raw_items = res.data or []
-            total = res.count if res.count is not None else len(raw_items)
+            try:
+                res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+                raw_items = res.data or []
+                total = res.count if res.count is not None else len(raw_items)
+            except Exception as req_err:
+                # If offset is out of range, PostgREST may raise 416 range error.
+                # Check total count to distinguish out-of-range from genuine DB failures.
+                err_str = str(req_err)
+                if "416" in err_str or "PGRST103" in err_str or "range" in err_str.lower():
+                    cnt_res = admin_supabase.table("disease_prediction").select("id", count="exact").execute()
+                    total = cnt_res.count if cnt_res.count is not None else 0
+                    raw_items = []
+                else:
+                    raise req_err
 
             # 2. Build item list with secondary_matches mapping (NO treatment_recommendations alias)
             items = []
