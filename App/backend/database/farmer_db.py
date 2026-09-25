@@ -504,14 +504,14 @@ def get_all_diagnostics_for_admin(
                 items.append(item_dict)
 
             # 3. Calculate aggregate summary metrics across FULL filtered cohort
-            stats_query = admin_supabase.table("disease_prediction").select("crop, primary_diagnosis, top_disease, top_pest, top_nutrient, confidence, top_disease_confidence")
+            stats_query = admin_supabase.table("disease_prediction").select("crop, top_disease, top_pest, top_nutrient, top_disease_confidence, top_pest_confidence, top_nutrient_confidence")
             if crop and crop.strip(): stats_query = stats_query.ilike("crop", f"%{crop.strip()}%")
             if state and state.strip(): stats_query = stats_query.ilike("state", f"%{state.strip()}%")
             if district and district.strip(): stats_query = stats_query.ilike("district", f"%{district.strip()}%")
             if effective_status: stats_query = stats_query.eq("status", effective_status)
             if start_date: stats_query = stats_query.gte("created_at", start_date)
             if end_date: stats_query = stats_query.lte("created_at", end_date)
-            if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,primary_diagnosis.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
+            if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
 
             stats_res = stats_query.execute()
             stats_rows = stats_res.data or []
