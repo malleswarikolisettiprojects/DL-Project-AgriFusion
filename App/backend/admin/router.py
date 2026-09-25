@@ -402,7 +402,7 @@ class AddAdvisoryNoteRequest(BaseModel):
     note: str
 
 
-FeedbackStatus = Literal["new", "pending_review", "under_review", "resolved", "rejected"]
+FeedbackStatus = Literal["new", "pending_review", "under_review", "resolved", "rejected", "reviewed"]
 FeedbackPriority = Literal["low", "normal", "high", "urgent"]
 
 
