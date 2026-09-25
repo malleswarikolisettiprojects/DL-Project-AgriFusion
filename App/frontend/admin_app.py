@@ -561,12 +561,46 @@ elif menu == "💬 Farmer Feedback & Support":
                 cat_val = f.get("category") or "other"
                 rat_val = f.get("rating")
                 stat_val = f.get("status") or "pending_review"
+                fb_type = f.get("feedback_type") or "general"
+                
+                type_badge = "💬 Feedback"
+                if fb_type == "helpful":
+                    type_badge = "👍 Helpful"
+                elif fb_type == "not_helpful":
+                    type_badge = "👎 Not Helpful"
+                elif fb_type == "problem_report":
+                    type_badge = "⚠️ Problem Report"
 
-                with st.expander(f"⭐ Rating {rat_val}/5 — Module: {friendly_mod} | Category: {cat_val} ({stat_val})"):
-                    st.write(f"**Module:** `{friendly_mod}` ({mod_code or 'Not specified'})")
-                    st.write(f"**Category:** `{cat_val}`")
+                crop_str = f.get("crop") or "Not specified"
+                region_parts = [p for p in [f.get("district"), f.get("state")] if p]
+                region_str = ", ".join(region_parts) if region_parts else "Not specified"
+
+                expander_title = f"{type_badge} | ⭐ Rating {rat_val}/5 — Module: {friendly_mod} | Category: {cat_val} ({stat_val})"
+
+                with st.expander(expander_title):
+                    st.write(f"**Feedback Type:** `{fb_type}` | **Module:** `{friendly_mod}` ({mod_code or 'General'})")
+                    st.write(f"**Crop:** `{crop_str}` | **Region:** `{region_str}`")
+                    st.write(f"**Category:** `{cat_val}` | **Priority:** `{f.get('priority')}` | **Status:** `{stat_val}`")
                     st.write(f"**Farmer Comment:** {f.get('comment') or f.get('message')}")
-                    st.write(f"**Date:** {f.get('created_at')} | **Priority:** `{f.get('priority')}`")
+                    
+                    adv_id = f.get("advisory_id")
+                    pred_id = f.get("prediction_id")
+                    if adv_id or pred_id:
+                        st.write(f"**Linked Advisory ID:** `{adv_id or 'None'}` | **Linked Prediction ID:** `{pred_id or 'None'}`")
+
+                    snapshot = f.get("context_snapshot") or {}
+                    if isinstance(snapshot, dict) and snapshot.get("status") != "unavailable" and any(k in snapshot for k in ("question_summary", "query_summary", "ai_answer", "relevant_details")):
+                        st.markdown("---")
+                        st.markdown("##### 📌 Rated Context Snapshot")
+                        q_summary = snapshot.get("question_summary") or snapshot.get("query_summary")
+                        if q_summary:
+                            st.write(f"**Farmer Query / Topic:** {q_summary}")
+                        if snapshot.get("ai_answer"):
+                            st.write(f"**AI Advice Provided:** {snapshot.get('ai_answer')}")
+                        if snapshot.get("relevant_details"):
+                            st.write(f"**Relevant Details:** `{snapshot.get('relevant_details')}`")
+
+                    st.caption(f"Submitted At: {f.get('created_at')} | Identity Redacted")
         else:
             st.info("No farmer feedback reports match the selected filters.")
     except Exception as err:
