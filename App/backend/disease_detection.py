@@ -204,7 +204,7 @@ def run_roboflow(config: dict[str, str], raw: bytes, content_type: str) -> dict[
         headers={"Authorization": f"Bearer {ROBOFLOW_API_KEY}"},
         params={"confidence": CONFIDENCE, "overlap": IOU},
         files={"file": ("image", raw, content_type)},
-        timeout=30,
+        timeout=5.0,
     )
     response.raise_for_status()
     payload = response.json()
@@ -219,7 +219,7 @@ def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "ima
     model_id = config["model_id"]
     url = f"https://api-inference.huggingface.co/models/{model_id}"
     headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": content_type}
-    response = httpx.post(url, headers=headers, content=raw, timeout=30)
+    response = httpx.post(url, headers=headers, content=raw, timeout=5.0)
     response.raise_for_status()
     payload = response.json()
     items = []
