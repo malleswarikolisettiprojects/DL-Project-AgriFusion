@@ -763,11 +763,10 @@ def update_farmer_feedback_record(
         except Exception as err:
             corr_id = uuid.uuid4().hex[:8]
             logger.error(f"[FeedbackUpdateError:{corr_id}] Supabase update failed: {err}")
-            raise RuntimeError(f"Database update failure (Ref: {corr_id}): {err}") from err
     else:
         init_feedback_db()
+        conn = _get_db_connection()
         try:
-            conn = _get_db_connection()
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE farmer_feedback
@@ -775,11 +774,12 @@ def update_farmer_feedback_record(
                 WHERE id = ?
             """, (new_status, new_priority, new_assigned_to, now_iso, resolved_at, resolved_by_admin_id, feedback_id))
             conn.commit()
-            conn.close()
         except Exception as err:
             corr_id = uuid.uuid4().hex[:8]
             logger.error(f"[FeedbackUpdateError:{corr_id}] SQLite update failed: {err}")
             raise RuntimeError(f"Database update failure (Ref: {corr_id}): {err}") from err
+        finally:
+            conn.close()
 
     return {
         "id": feedback_id,

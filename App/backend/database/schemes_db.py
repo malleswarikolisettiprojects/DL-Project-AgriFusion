@@ -208,26 +208,26 @@ def init_schemes_db():
             },
         ]
 
-        for s in seed_schemes:
-            cursor.execute("""
-                INSERT INTO government_schemes (
-                    id, scheme_name, scheme_type, state_relevance_json, district_relevance_json,
-                    department, official_portal, source_title, source_organization, source_url,
-                    verification_status, current_status, verified_date, last_checked_at,
-                    verified_by_admin_id, verification_notes, benefit_summary, eligibility_summary,
-                    required_documents_json, application_route, deadline, caveats_json, is_active, needs_review
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                s["id"], s["scheme_name"], s["scheme_type"], json.dumps(s["state_relevance"]),
-                json.dumps(s["district_relevance"]), s["department"], s["official_portal"],
-                s["source_title"], s["source_organization"], s["source_url"],
-                s["verification_status"], s["current_status"], s["verified_date"],
-                s["last_checked_at"], s["verified_by_admin_id"], s["verification_notes"],
-                s["benefit_summary"], s["eligibility_summary"], json.dumps(s["required_documents"]),
-                s["application_route"], s["deadline"], json.dumps(s["caveats"]),
-                s["is_active"], s["needs_review"]
-            ))
-        conn.commit()
+            for s in seed_schemes:
+                cursor.execute("""
+                    INSERT INTO government_schemes (
+                        id, scheme_name, scheme_type, state_relevance_json, district_relevance_json,
+                        department, official_portal, source_title, source_organization, source_url,
+                        verification_status, current_status, verified_date, last_checked_at,
+                        verified_by_admin_id, verification_notes, benefit_summary, eligibility_summary,
+                        required_documents_json, application_route, deadline, caveats_json, is_active, needs_review
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    s["id"], s["scheme_name"], s["scheme_type"], json.dumps(s["state_relevance"]),
+                    json.dumps(s["district_relevance"]), s["department"], s["official_portal"],
+                    s["source_title"], s["source_organization"], s["source_url"],
+                    s["verification_status"], s["current_status"], s["verified_date"],
+                    s["last_checked_at"], s["verified_by_admin_id"], s["verification_notes"],
+                    s["benefit_summary"], s["eligibility_summary"], json.dumps(s["required_documents"]),
+                    s["application_route"], s["deadline"], json.dumps(s["caveats"]),
+                    s["is_active"], s["needs_review"]
+                ))
+            conn.commit()
     finally:
         conn.close()
     _schemes_db_initialized = True
