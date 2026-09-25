@@ -236,13 +236,15 @@ elif menu == "🚜 Regional Farm Profiles":
 elif menu == "🩺 Advisory Quality & Audit":
     st.header("🩺 Farmer Advisory Quality & Compliance Monitoring")
 
-    a_col1, a_col2, a_col3 = st.columns(3)
+    a_col1, a_col2, a_col3, a_col4 = st.columns(4)
     with a_col1:
         adv_state_f = st.selectbox("State Filter", ["All", "Andhra Pradesh", "Telangana", "Karnataka", "Punjab", "Maharashtra"])
     with a_col2:
         no_source_only = st.checkbox("Advisories - No Verified Sources Only", value=False)
     with a_col3:
         requires_review_only = st.checkbox("Requires Review Only", value=False)
+    with a_col4:
+        adv_search_input = st.text_input("Search Advisories", value="", placeholder="Summary, crop, region, ID...")
 
     params = {"page": 1, "page_size": 50}
     if adv_state_f != "All":
@@ -251,6 +253,8 @@ elif menu == "🩺 Advisory Quality & Audit":
         params["status"] = "no_verified_source"
     if requires_review_only:
         params["review_status"] = "needs_review"
+    if adv_search_input.strip():
+        params["search"] = adv_search_input.strip()
 
     try:
         adv_res = requests.get(f"{API_BASE_URL}/api/v1/admin/advisories", headers=get_headers(), params=params, timeout=10)
@@ -262,9 +266,9 @@ elif menu == "🩺 Advisory Quality & Audit":
             if items:
                 for adv in items:
                     comp = adv.get("compliance", {})
-                    status_color = "🟢 Passed" if comp.get("compliance_status") == "passed" else "🟡 Needs Review"
-                    with st.expander(f"🔍 {adv.get('query_summary')} ({adv.get('crop') or 'General'}) — Compliance: {status_color}"):
-                        st.write(f"**Date:** {adv.get('created_at')} | **State:** {adv.get('state')} | **Status:** `{adv.get('activity_status')}`")
+                    status_color = "🟢 Passed" if comp.get("compliance_status") == "passed" else ("🟡 Needs Review" if comp.get("compliance_status") == "needs_review" else "🔴 Failed / Timeout")
+                    with st.expander(f"🔍 {adv.get('query_summary')} ({adv.get('crop') or 'General'}) — Status: `{adv.get('activity_status')}` — Compliance: {status_color}"):
+                        st.write(f"**Date:** {adv.get('created_at')} | **State:** {adv.get('state') or 'N/A'} | **District:** {adv.get('district') or 'N/A'} | **Status:** `{adv.get('activity_status')}`")
                         st.json(comp)
                         
                         note_text = st.text_input("Add Agronomist Note", key=f"note_{adv['query_id']}")
@@ -278,11 +282,19 @@ elif menu == "🩺 Advisory Quality & Audit":
                                 st.success("Agronomist review note recorded!")
                                 st.rerun()
             else:
-                st.info("No advisory telemetry logs match the selected filters.")
+                st.info(adv_data.get("privacy_note", "No advisory telemetry logs match the selected filters."))
+        elif adv_res.status_code == 401:
+            st.error("🔒 Authentication Error (401): Session expired or invalid admin token. Please sign in again.")
+        elif adv_res.status_code == 403:
+            st.error("🚫 Access Forbidden (403): You do not have administrator permissions to access advisory telemetry.")
+        elif adv_res.status_code == 500:
+            st.error("💥 Server Error (HTTP 500): Database query failed for advisory activity telemetry. The backend failed closed instead of returning a false empty list.")
         else:
-            st.error(f"Failed to fetch advisory activities: {adv_res.text}")
+            st.error(f"Failed to fetch advisory activities (HTTP {adv_res.status_code}): {adv_res.text}")
+    except requests.exceptions.Timeout:
+        st.error("⏳ Network Timeout: Request to fetch advisory activity logs timed out.")
     except Exception as err:
-        st.error(f"Failed to fetch advisory compliance records: {err}")
+        st.error(f"🌐 Connection Error: Could not reach backend API server ({err})")
 
 # =============================================================================
 # MODULE 5: SECURITY AUDIT LOGS
