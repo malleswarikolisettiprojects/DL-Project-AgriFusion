@@ -719,7 +719,7 @@ async def sync_knowledge_sources(
     synced_at = datetime.now(timezone.utc).isoformat()
     synced_count = len(local_docs)
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="sync",
         target_type="knowledge_sources",
@@ -843,7 +843,7 @@ async def get_admin_diagnostics(
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """Retrieve paginated crop health diagnostic reports for administrative review (anonymized/minimized PII)."""
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="diagnostics_list_viewed",
         target_type="diagnostic_reports",
@@ -921,7 +921,7 @@ async def update_user_status(
         )
 
     # Record audit log event
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="user_status_changed",
         target_type="user",
@@ -979,7 +979,7 @@ async def update_user_role(
         )
 
     # Record audit log event
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="user_role_changed",
         target_type="user",
@@ -1025,7 +1025,7 @@ async def get_admin_farms(
       - Fails closed with 500 error if database query fails.
     Never returns farm IDs, user IDs, names, villages, coordinates, or individual farm records.
     """
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="admin_farms_count_viewed",
         target_type="farms_coverage",
@@ -1080,7 +1080,7 @@ async def get_admin_advisories(
     """
     Retrieve anonymized farmer advisory RAG activity and agronomic quality compliance checks.
     """
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="advisory_activity_viewed",
         target_type="advisory_activity",
@@ -1132,7 +1132,7 @@ async def review_advisory_activity(
         add_advisory_note(query_id, admin_user.id, payload.note)
 
     action_name = "advisory_marked_for_review" if payload.review_status == "needs_review" else "advisory_reviewed"
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action=action_name,
         target_type="advisory_activity",
@@ -1157,7 +1157,7 @@ async def create_advisory_note(
     """Attach an administrative review note to an advisory query."""
     ok = add_advisory_note(query_id, admin_user.id, payload.note)
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="advisory_note_added",
         target_type="advisory_activity",
@@ -1250,7 +1250,7 @@ async def update_admin_feedback(
         raise HTTPException(status_code=404, detail="Feedback record not found.")
 
     if payload.status is not None:
-        await record_audit_event(
+        record_audit_event(
             admin_user_id=admin_user.id,
             action="feedback_status_changed",
             target_type="farmer_feedback",
@@ -1258,7 +1258,7 @@ async def update_admin_feedback(
             safe_metadata={"status": payload.status},
         )
     if payload.priority is not None:
-        await record_audit_event(
+        record_audit_event(
             admin_user_id=admin_user.id,
             action="feedback_priority_changed",
             target_type="farmer_feedback",
@@ -1266,7 +1266,7 @@ async def update_admin_feedback(
             safe_metadata={"priority": payload.priority},
         )
     if payload.assigned_to is not None:
-        await record_audit_event(
+        record_audit_event(
             admin_user_id=admin_user.id,
             action="feedback_assigned_to_changed",
             target_type="farmer_feedback",
@@ -1293,7 +1293,7 @@ async def add_admin_feedback_note(
     if not note_obj:
         raise HTTPException(status_code=404, detail="Feedback record not found.")
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="feedback_review_note_added",
         target_type="farmer_feedback",
@@ -1376,7 +1376,7 @@ async def get_admin_knowledge_sources(
     if status and status not in ALLOWED_INDEX_STATUSES:
         raise HTTPException(status_code=422, detail=f"Unsupported index status filter '{status}'. Allowed values: {sorted(list(ALLOWED_INDEX_STATUSES))}")
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="source_viewed",
         target_type="knowledge_source",
@@ -1413,7 +1413,7 @@ async def get_admin_knowledge_source_detail(
     if not item:
         raise HTTPException(status_code=404, detail=f"Knowledge source '{source_id}' not found.")
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="source_viewed",
         target_type="knowledge_source",
@@ -1460,7 +1460,7 @@ async def register_admin_knowledge_source(
         raise HTTPException(status_code=422, detail=str(result))
 
     new_id = result.get("id") if isinstance(result, dict) else None
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="source_registered",
         target_type="knowledge_source",
@@ -1522,7 +1522,7 @@ async def update_admin_knowledge_source(
     else:
         action_name = "source_metadata_updated"
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action=action_name,
         target_type="knowledge_source",
@@ -1559,7 +1559,7 @@ async def update_knowledge_source_approval(
     if not success:
         raise HTTPException(status_code=422, detail=str(result))
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="knowledge_source_approval_updated",
         target_type="knowledge_source",
@@ -1586,7 +1586,7 @@ async def trigger_reindex_source(
     if not success:
         raise HTTPException(status_code=422, detail=str(result))
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="source_reindex_requested",
         target_type="knowledge_source",
@@ -1650,7 +1650,7 @@ async def upload_admin_knowledge_document(
 
     load_local_agronomy_documents(force_reload=True)
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="document_uploaded_to_rag",
         target_type="knowledge_source",
@@ -1681,7 +1681,7 @@ async def delete_admin_knowledge_source(
 
     load_local_agronomy_documents(force_reload=True)
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="source_deleted",
         target_type="knowledge_source",
@@ -1728,7 +1728,7 @@ async def get_admin_government_schemes(
             detail=f"Unsupported current_status filter '{current_status}'. Allowed values: {sorted(list(ALLOWED_SCHEME_CURRENT_STATUSES))}"
         )
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="scheme_viewed",
         target_type="government_scheme",
@@ -1766,7 +1766,7 @@ async def get_admin_government_scheme_detail(
     if not item:
         raise HTTPException(status_code=404, detail=f"Government scheme '{scheme_id}' not found.")
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="scheme_viewed",
         target_type="government_scheme",
@@ -1814,7 +1814,7 @@ async def register_admin_government_scheme(
         raise HTTPException(status_code=422, detail=str(result))
 
     new_id = result.get("id") if isinstance(result, dict) else None
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="scheme_registered",
         target_type="government_scheme",
@@ -1875,7 +1875,7 @@ async def update_admin_government_scheme(
     else:
         action_name = "scheme_metadata_updated"
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action=action_name,
         target_type="government_scheme",
@@ -1912,7 +1912,7 @@ async def verify_admin_government_scheme(
     if not success:
         raise HTTPException(status_code=422, detail=str(result))
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="scheme_verified",
         target_type="government_scheme",
@@ -1940,7 +1940,7 @@ async def trigger_recheck_scheme(
     if not success:
         raise HTTPException(status_code=422, detail=str(result))
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="scheme_recheck_requested",
         target_type="government_scheme",
@@ -1967,7 +1967,7 @@ async def delete_admin_government_scheme(
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to delete scheme: {e}")
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="scheme_deleted",
         target_type="government_scheme",
@@ -2026,7 +2026,7 @@ async def trigger_reindex_knowledge_sources(
 ):
     """Trigger reindexing of canonical agronomy documents and schemes."""
     docs = load_local_agronomy_documents()
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="knowledge_reindex_triggered",
         target_type="rag_documents",
@@ -2276,7 +2276,7 @@ async def update_admin_settings(
     if not updated_fields:
         raise HTTPException(status_code=422, detail="No valid settings fields provided for update.")
 
-    await record_audit_event(
+    record_audit_event(
         admin_user_id=admin_user.id,
         action="system_settings_updated",
         target_type="system_settings",
