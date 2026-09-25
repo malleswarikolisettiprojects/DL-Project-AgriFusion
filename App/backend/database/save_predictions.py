@@ -257,11 +257,17 @@ def save_market_prediction(data):
 # ============================================================
 
 def save_disease_prediction(data):
-    try:
-        if supabase is not None:
-            now = datetime.now(timezone.utc).isoformat()
+    if supabase is None:
+        return None
+
+    now = datetime.now(timezone.utc).isoformat()
+    user_id = data.get("user_id")
+
+    # 1. Save to user personal history (diagnostic_reports) if authenticated user_id present
+    if user_id:
+        try:
             supabase.table("diagnostic_reports").insert({
-                "user_id": data.get("user_id"),
+                "user_id": user_id,
                 "crop": data.get("crop") or "Unknown",
                 "image_storage_path": data.get("annotated_image_url"),
                 "detection_results": data.get("all_detections") or {},
@@ -269,7 +275,26 @@ def save_disease_prediction(data):
                 "confidence": data.get("top_disease_confidence") or 0.9,
                 "created_at": now,
             }).execute()
+        except Exception as e:
+            print(f"Warning: Could not save to diagnostic_reports: {e}")
 
+        try:
+            _save_to_prediction_records(
+                user_id=user_id,
+                prediction_type="disease_detection",
+                request_payload={"crop": data.get("crop")},
+                result_payload={
+                    "top_disease": data.get("top_disease"),
+                    "top_pest": data.get("top_pest"),
+                    "top_nutrient": data.get("top_nutrient"),
+                    "confidence": data.get("top_disease_confidence") or 0.9,
+                },
+            )
+        except Exception as e:
+            print(f"Warning: Could not save disease prediction to prediction_records: {e}")
+
+    # 2. Save to disease_prediction telemetry table (authenticated or anonymous)
+    try:
         response = (
             supabase
             .table("disease_prediction")
@@ -290,5 +315,5 @@ def save_disease_prediction(data):
         )
         return response
     except Exception as e:
-        print(f"Warning: Could not save disease prediction to Supabase: {e}")
+        print(f"Warning: Could not save disease prediction to disease_prediction table: {e}")
         return None

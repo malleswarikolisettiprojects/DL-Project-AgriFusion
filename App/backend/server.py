@@ -598,6 +598,7 @@ async def api_predict_disease(
     logger.info("[%s] POST /api/v1/predict/disease started - crop=%s filename=%s", req_id, crop, image.filename)
     try:
         user_email = current_user.email if current_user else None
+        user_id = current_user.id if current_user else None
         raw = await image.read()
         content_type = (image.content_type or "image/jpeg").lower()
         result = await asyncio.wait_for(
@@ -618,6 +619,7 @@ async def api_predict_disease(
         ]
         try:
             save_disease_prediction({
+                "user_id":                 user_id,
                 "user_email":              user_email,
                 "crop":                    crop,
                 "top_disease":             top_disease.get("label"),

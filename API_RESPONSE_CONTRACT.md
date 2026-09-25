@@ -683,7 +683,8 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 
 #### 9. Diagnostics & Reports Page (`GET /api/v1/admin/diagnostics`)
 - **Auth**: Authenticated Admin (`require_admin`)
-- **Params**: `crop`, `state`, `district`, `status`, `severity`, `start_date`, `end_date`, `page=1`, `page_size=25`
+- **Params**: `crop`, `state`, `district`, `status`, `review_status`, `severity`, `start_date`, `end_date`, `search`, `page=1`, `page_size=25`
+- **Error Behavior**: Raises **HTTP 500 Internal Server Error** on database infrastructure / query failures. Does NOT mask storage errors as `total: 0`. Valid empty table returns `HTTP 200 OK` with `items: []`, `total: 0`.
 - **Success Response (HTTP 200 OK)**:
   ```json
   {

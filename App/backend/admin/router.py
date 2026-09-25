@@ -837,28 +837,56 @@ async def get_admin_diagnostics(
     severity: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
+    review_status: Optional[str] = Query(None),
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """Retrieve paginated crop health diagnostic reports for administrative review (anonymized/minimized PII)."""
-    from App.backend.database.farmer_db import get_all_diagnostics_for_admin
-    data = get_all_diagnostics_for_admin(
-        page=page,
-        page_size=page_size,
-        crop=crop,
-        state=state,
-        district=district,
-        status=status,
-        severity=severity,
-        start_date=start_date,
-        end_date=end_date,
+    await record_audit_event(
+        admin_user_id=admin_user.id,
+        action="diagnostics_list_viewed",
+        target_type="diagnostic_reports",
+        safe_metadata={
+            "page": page,
+            "page_size": page_size,
+            "crop": crop,
+            "state": state,
+            "status": status,
+            "review_status": review_status,
+            "search": search,
+        },
     )
-    return {
-        "items": data.get("items", []),
-        "page": page,
-        "page_size": page_size,
-        "total": data.get("total", 0),
-        "privacy_note": "Diagnostic records are presented with farmer identity minimized.",
-    }
+
+    try:
+        from App.backend.database.farmer_db import get_all_diagnostics_for_admin
+        data = get_all_diagnostics_for_admin(
+            page=page,
+            page_size=page_size,
+            crop=crop,
+            state=state,
+            district=district,
+            status=status,
+            severity=severity,
+            start_date=start_date,
+            end_date=end_date,
+            search=search,
+            review_status=review_status,
+        )
+        return {
+            "items": data.get("items", []),
+            "page": page,
+            "page_size": page_size,
+            "total": data.get("total", 0),
+            "privacy_note": "Diagnostic records are presented with farmer identity minimized.",
+        }
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to fetch admin diagnostics: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="The backend encountered an internal error.",
+        ) from exc
 
 
 @admin_router.patch("/users/{user_id}/status")

@@ -92,6 +92,7 @@ with st.sidebar:
             "👤 User Directory",
             "🚜 Regional Farm Profiles",
             "🩺 Advisory Quality & Audit",
+            "🔬 Crop Diagnostics Audit",
             "🛡️ Security Audit Logs",
             "📚 RAG Knowledge Sources",
             "🏛️ Government Schemes Registry",
@@ -438,3 +439,62 @@ elif menu == "💬 Farmer Feedback & Support":
             st.info("No farmer feedback reports submitted yet.")
     except Exception as err:
         st.error(f"Failed to fetch farmer feedback: {err}")
+
+# =============================================================================
+# MODULE 9: CROP DIAGNOSTICS AUDIT & REVIEW
+# =============================================================================
+elif menu == "🔬 Crop Diagnostics Audit":
+    st.header("🔬 Crop Health Diagnostics Audit & Review")
+
+    d_col1, d_col2, d_col3, d_col4 = st.columns(4)
+    with d_col1:
+        diag_crop_f = st.selectbox("Crop Filter", ["All", "Paddy / Rice", "Cotton", "Chilli", "Maize", "Groundnut", "Tomato", "Sugarcane"])
+    with d_col2:
+        diag_state_f = st.selectbox("State Filter", ["All", "Andhra Pradesh", "Telangana", "Karnataka", "Punjab", "Maharashtra"])
+    with d_col3:
+        diag_status_f = st.selectbox("Status Filter", ["All", "reviewed", "pending", "flagged"])
+    with d_col4:
+        diag_search_input = st.text_input("Search Diagnostics", value="", placeholder="Crop, diagnosis, region, ID...")
+
+    params = {"page": 1, "page_size": 50}
+    if diag_crop_f != "All":
+        params["crop"] = diag_crop_f
+    if diag_state_f != "All":
+        params["state"] = diag_state_f
+    if diag_status_f != "All":
+        params["status"] = diag_status_f
+    if diag_search_input.strip():
+        params["search"] = diag_search_input.strip()
+
+    try:
+        diag_res = requests.get(f"{API_BASE_URL}/api/v1/admin/diagnostics", headers=get_headers(), params=params, timeout=10)
+        if diag_res.status_code == 200:
+            diag_data = diag_res.json()
+            items = diag_data.get("items", [])
+            st.subheader(f"Logged Diagnostic Reports: {diag_data.get('total', len(items))}")
+
+            if items:
+                for diag in items:
+                    conf_pct = round((diag.get("confidence") or 0.0) * 100, 1)
+                    with st.expander(f"🔬 {diag.get('diagnosis')} on {diag.get('crop')} ({conf_pct}% confidence) — {diag.get('state') or 'N/A'}"):
+                        st.write(f"**Report ID:** `{diag.get('id')}` | **Date:** {diag.get('created_at')} | **Severity:** `{diag.get('severity')}` | **Status:** `{diag.get('status')}`")
+                        rec_list = diag.get("treatment_recommendations") or []
+                        if rec_list:
+                            st.write("**Treatment Recommendations:**")
+                            for r in rec_list:
+                                st.write(f"- {r}")
+                        st.caption(diag_data.get("privacy_note", ""))
+            else:
+                st.info("No diagnostic records match the selected filters.")
+        elif diag_res.status_code == 401:
+            st.error("🔒 Authentication Error (401): Session expired or invalid admin token. Please sign in again.")
+        elif diag_res.status_code == 403:
+            st.error("🚫 Access Forbidden (403): You do not have administrator permissions to access diagnostic reports.")
+        elif diag_res.status_code == 500:
+            st.error("💥 Server Error (HTTP 500): Database query failed for diagnostic reports. The backend failed closed instead of returning a false empty list.")
+        else:
+            st.error(f"Failed to fetch diagnostic reports (HTTP {diag_res.status_code}): {diag_res.text}")
+    except requests.exceptions.Timeout:
+        st.error("⏳ Network Timeout: Request to fetch diagnostic reports timed out.")
+    except Exception as err:
+        st.error(f"🌐 Connection Error: Could not reach backend API server ({err})")

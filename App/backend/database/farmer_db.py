@@ -377,6 +377,14 @@ def get_diagnostic_by_id(user_id: str, diagnostic_id: str) -> Optional[Dict[str,
     return None
 
 
+def _get_admin_supabase():
+    try:
+        from App.backend.settings import create_supabase_admin_client, create_supabase_client
+        return create_supabase_admin_client() or create_supabase_client()
+    except Exception:
+        return None
+
+
 def get_all_diagnostics_for_admin(
     page: int = 1,
     page_size: int = 25,
@@ -387,58 +395,84 @@ def get_all_diagnostics_for_admin(
     severity: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    search: Optional[str] = None,
+    review_status: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Fetch paginated diagnostic reports across all farmers with filters for administrative review (non-PII)."""
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
     offset = (page - 1) * page_size
 
-    if supabase is None:
-        return {"items": [], "page": page, "page_size": page_size, "total": 0}
-    try:
-        query = supabase.table("diagnostic_reports").select("*", count="exact")
-        if crop:
-            query = query.ilike("crop", f"%{crop}%")
-        if status:
-            query = query.eq("status", status)
-        if severity:
-            query = query.ilike("detection_results->>severity", f"%{severity}%")
-        if start_date:
-            query = query.gte("created_at", start_date)
-        if end_date:
-            query = query.lte("created_at", end_date)
+    from App.backend.settings import SUPABASE_URL
+    admin_supabase = _get_admin_supabase()
 
-        res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
-        raw_items = res.data or []
-        total = res.count if res.count is not None else len(raw_items)
+    if SUPABASE_URL:
+        if admin_supabase is None:
+            logger.error("Supabase configured but admin client unavailable for diagnostic_reports read.")
+            raise RuntimeError("Database query failed for admin diagnostics")
+        try:
+            query = admin_supabase.table("diagnostic_reports").select("*", count="exact")
+            if crop:
+                query = query.ilike("crop", f"%{crop}%")
+            effective_status = status or review_status
+            if effective_status:
+                query = query.eq("status", effective_status)
+            if severity:
+                query = query.ilike("detection_results->>severity", f"%{severity}%")
+            if start_date:
+                query = query.gte("created_at", start_date)
+            if end_date:
+                query = query.lte("created_at", end_date)
 
-        items = []
-        for r in raw_items:
-            det = r.get("detection_results") if isinstance(r.get("detection_results"), dict) else {}
-            treatments = det.get("treatment_recommendations") or det.get("recommendations") or []
-            items.append({
-                "id": str(r.get("id")),
-                "created_at": r.get("created_at"),
-                "crop": r.get("crop") or "Unknown",
-                "state": r.get("state") or det.get("state") or "Andhra Pradesh",
-                "district": r.get("district") or det.get("district") or "Visakhapatnam",
-                "diagnosis": r.get("primary_diagnosis") or det.get("diagnosis") or "Healthy",
-                "confidence": float(r.get("confidence") or det.get("confidence") or 0.0),
-                "severity": det.get("severity") or "Normal",
-                "treatment_recommendations": treatments,
-                "status": r.get("status") or "reviewed",
-                "identity_redacted": True,
-            })
+            res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+            if res.data is None:
+                logger.error("Supabase diagnostic_reports query returned None data")
+                raise RuntimeError("Database query failed for admin diagnostics")
 
-        # Apply state/district filtering in memory if DB columns are nested
-        if state:
-            items = [i for i in items if i["state"].lower() == state.strip().lower()]
-        if district:
-            items = [i for i in items if i["district"].lower() == district.strip().lower()]
+            raw_items = res.data or []
+            total = res.count if res.count is not None else len(raw_items)
 
-        return {"items": items, "page": page, "page_size": page_size, "total": total}
-    except Exception as e:
-        logger.error(f"Error fetching admin diagnostics: {e}")
+            items = []
+            for r in raw_items:
+                det = r.get("detection_results") if isinstance(r.get("detection_results"), dict) else {}
+                treatments = det.get("treatment_recommendations") or det.get("recommendations") or []
+                item_dict = {
+                    "id": str(r.get("id")),
+                    "created_at": r.get("created_at"),
+                    "crop": r.get("crop") or "Unknown",
+                    "state": r.get("state") or det.get("state") or "Andhra Pradesh",
+                    "district": r.get("district") or det.get("district") or "Visakhapatnam",
+                    "diagnosis": r.get("primary_diagnosis") or det.get("diagnosis") or "Healthy",
+                    "confidence": float(r.get("confidence") or det.get("confidence") or 0.0),
+                    "severity": det.get("severity") or "Normal",
+                    "treatment_recommendations": treatments,
+                    "status": r.get("status") or "reviewed",
+                    "identity_redacted": True,
+                }
+                items.append(item_dict)
+
+            # Apply in-memory state/district/search filters if needed
+            if state:
+                items = [i for i in items if i["state"].lower() == state.strip().lower()]
+            if district:
+                items = [i for i in items if i["district"].lower() == district.strip().lower()]
+            if search:
+                s_term = search.strip().lower()
+                items = [
+                    i for i in items
+                    if s_term in i["crop"].lower()
+                    or s_term in i["diagnosis"].lower()
+                    or s_term in i["state"].lower()
+                    or s_term in i["district"].lower()
+                    or s_term in i["id"].lower()
+                ]
+
+            return {"items": items, "page": page, "page_size": page_size, "total": total}
+        except Exception as exc:
+            logger.error("Supabase diagnostic_reports read failure: %s", exc)
+            raise RuntimeError("Database query failed for admin diagnostics") from exc
+    else:
+        # Standalone testing mode without SUPABASE_URL configured
         return {"items": [], "page": page, "page_size": page_size, "total": 0}
 
 
