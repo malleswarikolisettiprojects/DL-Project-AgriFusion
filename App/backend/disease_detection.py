@@ -353,12 +353,42 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     pest_runs = [results_by_config.get(id(cfg), {}) for cfg in SHARED_MODELS["pest"]]
     nutrient_runs = [results_by_config.get(id(cfg), {}) for cfg in SHARED_MODELS["nutrient"]]
 
+    all_runs = crop_runs + pest_runs + nutrient_runs
+    total_configured = len(all_configs)
+    providers_succeeded = sum(1 for r in all_runs if r.get("status") == "ok")
+    providers_failed = sum(1 for r in all_runs if r.get("status") in ("error", "failed"))
+    providers_timed_out = sum(1 for r in all_runs if r.get("status") == "timeout")
+    providers_skipped = sum(1 for r in all_runs if r.get("status") == "skipped")
+
     min_conf = CUSTOM_CROP_CONF_THRESHOLD if is_custom_crop else CONFIDENCE
+
+    providers_summary = {
+        "total_configured": total_configured,
+        "succeeded": providers_succeeded,
+        "failed": providers_failed,
+        "timed_out": providers_timed_out,
+        "skipped": providers_skipped,
+        "applied_threshold": min_conf,
+    }
+
+    # Collect all raw candidate detections across all provider runs
+    all_raw_detections = []
+    for run in all_runs:
+        for det in run.get("detections", []):
+            all_raw_detections.append({
+                "label": str(det.get("label", "unknown")),
+                "confidence": round(float(det.get("confidence", 0.0)), 6),
+                "provider": str(run.get("provider", "unknown")),
+                "model": str(run.get("model", "unknown")),
+                "box_xyxy": det.get("box_xyxy"),
+            })
+    all_raw_detections.sort(key=lambda x: x["confidence"], reverse=True)
+
+    # Winners >= min_conf
     top_crop = best_result(crop_runs, min_conf=min_conf)
     top_pest = best_result(pest_runs, min_conf=min_conf)
     top_nutrient = best_result(nutrient_runs, min_conf=min_conf)
 
-    # Sort all winners by confidence descending so highest confidence is selected as primary
     all_winners = sorted(
         [item for item in [top_crop, top_pest, top_nutrient] if item],
         key=lambda x: x["detection"].get("confidence", 0.0),
@@ -366,35 +396,85 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     )
     annotated_b64 = draw_bounding_boxes(pil_image, all_winners) if all_winners else ""
 
-    # Secondary/Alternate Detections list
+    # Secondary / alternate detections >= 0.15
     other_possible_detections = []
-    for run in crop_runs + pest_runs + nutrient_runs:
-        for det in run.get("detections", []):
-            is_winner = any(det == w["detection"] for w in all_winners)
-            if not is_winner and det.get("confidence", 0.0) >= 0.15:
-                other_possible_detections.append({
-                    "label": det.get("label"),
-                    "confidence": det.get("confidence"),
-                    "provider": run.get("provider"),
-                    "model": run.get("model"),
-                })
-    other_possible_detections.sort(key=lambda x: x["confidence"], reverse=True)
+    for det in all_raw_detections:
+        is_winner = any(det["label"] == w["detection"]["label"] and abs(det["confidence"] - w["detection"]["confidence"]) < 1e-5 for w in all_winners)
+        if not is_winner and det["confidence"] >= 0.15:
+            other_possible_detections.append(det)
 
-    primary_label = "Healthy Crop Leaf"
-    top_confidence_val = 0.0
+    # Classify inference_outcome into one of 4 distinct categories:
+    # 1. provider_error: all configured providers failed/timed out/skipped
+    # 2. no_detection: providers responded successfully, but zero candidate detections were returned
+    # 3. low_confidence: candidate detections exist, but top candidate is below LOW_CONFIDENCE_THRESHOLD
+    # 4. detected: top candidate meets or exceeds threshold
+    if providers_succeeded == 0 and total_configured > 0:
+        inference_outcome = "provider_error"
+    elif not all_raw_detections:
+        inference_outcome = "no_detection"
+    elif not all_winners or all_winners[0]["detection"].get("confidence", 0.0) < LOW_CONFIDENCE_THRESHOLD:
+        inference_outcome = "low_confidence"
+    else:
+        inference_outcome = "detected"
+
+    primary_label: Optional[str] = None
+    top_confidence_val: Optional[float] = None
     is_low_confidence = False
-
-    if all_winners:
-        primary_label = all_winners[0]["detection"]["label"]
-        top_confidence_val = all_winners[0]["detection"].get("confidence", 0.0)
-
-    if top_confidence_val < LOW_CONFIDENCE_THRESHOLD and (top_crop or top_pest or top_nutrient):
-        is_low_confidence = True
-
-    # Only fetch RAG remedies when confidence is sufficient
     rag_remedies = None
-    if not is_low_confidence:
-        rag_remedies = generate_rag_remedies(primary_label, crop=crop)
+    notice_text = custom_crop_notice
+
+    def _is_healthy_label(label_str: Optional[str]) -> bool:
+        if not label_str:
+            return False
+        lbl = label_str.lower().strip()
+        return "healthy" in lbl or lbl == "healthy crop leaf"
+
+    if inference_outcome == "detected":
+        primary_label = all_winners[0]["detection"]["label"]
+        top_confidence_val = round(float(all_winners[0]["detection"].get("confidence", 0.0)), 4)
+        is_low_confidence = False
+        if _is_healthy_label(primary_label):
+            rag_remedies = None
+            healthy_msg = "Crop appears healthy based on visual AI analysis."
+            if not notice_text:
+                notice_text = healthy_msg
+            else:
+                notice_text = f"{notice_text} {healthy_msg}"
+        else:
+            rag_remedies = generate_rag_remedies(primary_label, crop=crop)
+
+    elif inference_outcome == "low_confidence":
+        is_low_confidence = True
+        top_confidence_val = round(float(all_raw_detections[0]["confidence"]), 4) if all_raw_detections else None
+        primary_label = None  # Do NOT fabricate healthy diagnosis
+        notice_text = (
+            f"Candidate detected but confidence ({top_confidence_val if top_confidence_val is not None else 'low'}) is below minimum threshold ({LOW_CONFIDENCE_THRESHOLD:.0%}). "
+            "Results may not be reliable. Please consult an agriculture professional."
+        )
+
+    elif inference_outcome == "no_detection":
+        is_low_confidence = True
+        primary_label = None  # Do NOT fabricate healthy diagnosis
+        top_confidence_val = None
+        notice_text = (
+            "No disease or pest symptoms were detected by visual analysis. "
+            "If your crop displays unusual symptoms, please consult a local Agriculture Officer."
+        )
+
+    elif inference_outcome == "provider_error":
+        is_low_confidence = True
+        primary_label = None  # Do NOT fabricate healthy diagnosis
+        top_confidence_val = None
+        notice_text = (
+            "Automated visual analysis is currently unavailable or timed out. "
+            "Please try again later or consult a local agronomy expert."
+        )
+
+    if is_custom_crop and custom_crop_notice:
+        if notice_text and notice_text != custom_crop_notice:
+            notice_text = f"{custom_crop_notice} {notice_text}"
+        else:
+            notice_text = custom_crop_notice
 
     prediction_id = str(uuid.uuid4())
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
@@ -415,17 +495,18 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         "disclaimer": AI_DISCLAIMER_TEXT,
         "crop": crop,
         "is_custom_crop": is_custom_crop,
-        "notice": custom_crop_notice,
+        "inference_outcome": inference_outcome,
+        "execution_status": "success" if providers_succeeded > 0 else "error",
+        "review_status": "pending_review",
+        "notice": notice_text,
         "image_url": image_url,
         "annotated_image_b64": annotated_b64,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "primary_diagnosis": primary_label,
-        "top_confidence": round(top_confidence_val, 4),
+        "top_confidence": top_confidence_val,
         "is_low_confidence": is_low_confidence,
-        "low_confidence_notice": (
-            "Detection confidence is below the minimum threshold. "
-            "Results may not be reliable. Please consult an agriculture professional."
-        ) if is_low_confidence else None,
+        "low_confidence_notice": notice_text if is_low_confidence else None,
+        "providers_summary": providers_summary,
         "selected_crop_result": top_crop,
         "selected_pest_result": top_pest,
         "selected_nutrient_result": top_nutrient,

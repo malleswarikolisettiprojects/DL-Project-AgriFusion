@@ -975,9 +975,18 @@ async def api_predict_disease(
                 "annotated_image_url":     result.get("image_url") or result.get("annotated_image_url"),
                 "all_detections":          all_detections,
                 "custom_crop_notice":      result.get("notice") or result.get("custom_crop_notice"),
+                "inference_outcome":       result.get("inference_outcome", "detected"),
+                "providers_summary":       result.get("providers_summary"),
                 "request_summary":         {"filename": image.filename, "content_type": content_type},
-                "result_summary":         {"primary_diagnosis": primary_diag, "confidence": top_conf, "all_detections_count": len(all_detections)},
-                "status":                 "success",
+                "result_summary":         {
+                    "primary_diagnosis": primary_diag,
+                    "confidence": top_conf,
+                    "inference_outcome": result.get("inference_outcome"),
+                    "providers_summary": result.get("providers_summary"),
+                    "all_detections_count": len(all_detections)
+                },
+                "status":                 "pending_review",
+                "execution_status":       result.get("execution_status", "success"),
                 "latency_ms":              duration_ms,
             })
             if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):

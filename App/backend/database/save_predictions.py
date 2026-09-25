@@ -373,7 +373,11 @@ def save_disease_prediction(data):
     now = datetime.now(timezone.utc).isoformat()
     user_id = data.get("user_id")
 
-    primary_diag = data.get("primary_diagnosis") or data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient")
+    if "primary_diagnosis" in data:
+        primary_diag = data["primary_diagnosis"]
+    else:
+        primary_diag = data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient")
+
     top_conf = data.get("top_confidence")
     if top_conf is None:
         top_conf = data.get("top_disease_confidence") or data.get("top_pest_confidence") or data.get("top_nutrient_confidence")
@@ -423,7 +427,7 @@ def save_disease_prediction(data):
             "top_pest": data.get("top_pest"),
             "top_nutrient": data.get("top_nutrient"),
         },
-        "status": data.get("status", "success"),
+        "status": data.get("execution_status", data.get("status", "success")),
         "latency_ms": data.get("latency_ms"),
         "error_code": data.get("error_code"),
         "user_id": user_id,
@@ -450,6 +454,7 @@ def save_disease_prediction(data):
             "annotated_image_url":     data.get("annotated_image_url"),
             "all_detections":          data.get("all_detections") or [],
             "custom_crop_notice":      data.get("custom_crop_notice"),
+            "status":                  data.get("status", "pending_review"),
         }
         if data.get("state"):
             insert_payload["state"] = data.get("state")
