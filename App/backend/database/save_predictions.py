@@ -433,13 +433,16 @@ def save_disease_prediction(data):
     telemetry_saved = False
     disease_resp = None
     try:
+        top_disease_val = data.get("top_disease") or primary_diag
+        top_disease_conf_val = data.get("top_disease_confidence") if data.get("top_disease_confidence") is not None else top_conf
+
         insert_payload = {
             "user_email":              data.get("user_email"),
             "crop":                    data.get("crop"),
             "primary_diagnosis":       primary_diag,
             "confidence":              top_conf,
-            "top_disease":             data.get("top_disease"),
-            "top_disease_confidence":  data.get("top_disease_confidence"),
+            "top_disease":             top_disease_val,
+            "top_disease_confidence":  top_disease_conf_val,
             "top_pest":                data.get("top_pest"),
             "top_pest_confidence":     data.get("top_pest_confidence"),
             "top_nutrient":            data.get("top_nutrient"),
@@ -455,16 +458,24 @@ def save_disease_prediction(data):
         if data.get("status"):
             insert_payload["status"] = data.get("status")
 
-        disease_resp = (
-            admin_client
-            .table("disease_prediction")
-            .insert(insert_payload)
-            .execute()
-        )
-        if disease_resp and disease_resp.data:
-            telemetry_saved = True
-    except Exception as e:
-        print(f"Warning: Could not save disease prediction to disease_prediction table: {e}")
+        try:
+            disease_resp = admin_client.table("disease_prediction").insert(insert_payload).execute()
+            if disease_resp and disease_resp.data:
+                telemetry_saved = True
+        except Exception as insert_err:
+            # Fallback if primary_diagnosis or confidence columns do not exist in PostgREST schema cache
+            print(f"Warning: Primary insert to disease_prediction table failed: {insert_err}. Trying fallback payload...")
+            fallback_payload = dict(insert_payload)
+            fallback_payload.pop("primary_diagnosis", None)
+            fallback_payload.pop("confidence", None)
+            try:
+                disease_resp = admin_client.table("disease_prediction").insert(fallback_payload).execute()
+                if disease_resp and disease_resp.data:
+                    telemetry_saved = True
+            except Exception as fb_err:
+                print(f"Warning: Could not save disease prediction to disease_prediction table: {fb_err}")
+    except Exception as outer_err:
+        print(f"Warning: Outer exception in save_disease_prediction: {outer_err}")
 
     return {
         "telemetry_saved": telemetry_saved or ml_res.get("telemetry_saved", False),

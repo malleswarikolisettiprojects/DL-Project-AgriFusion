@@ -466,13 +466,20 @@ def get_all_diagnostics_for_admin(
             # 2. Build item list with secondary_matches mapping
             items = []
             for r in raw_items:
+                all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
                 diag_name = r.get("primary_diagnosis") or r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient")
                 conf_raw = r.get("confidence")
                 if conf_raw is None:
                     conf_raw = r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence")
-                conf_val = float(conf_raw) if conf_raw is not None else None
                 
-                all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
+                if not diag_name and isinstance(all_det, list) and len(all_det) > 0:
+                    first_det = all_det[0]
+                    if isinstance(first_det, dict):
+                        diag_name = first_det.get("label")
+                        if conf_raw is None:
+                            conf_raw = first_det.get("confidence")
+
+                conf_val = float(conf_raw) if conf_raw is not None else None
                 
                 sec_matches = []
                 if isinstance(all_det, list) and len(all_det) > 0:
