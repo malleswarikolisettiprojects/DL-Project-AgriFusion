@@ -55,7 +55,7 @@ def _get_admin_client():
     return supabase
 
 
-async def record_audit_event(
+def record_audit_event(
     admin_user_id: str,
     action: str,
     target_type: str,

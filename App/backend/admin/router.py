@@ -1193,7 +1193,7 @@ async def get_admin_feedback_list(
     Retrieve paginated farmer feedback with identity minimized, reviewer assignment filters, and rating distributions.
     """
     try:
-        await record_audit_event(
+        record_audit_event(
             admin_user_id=admin_user.id,
             action="feedback_list_viewed",
             target_type="farmer_feedback",
