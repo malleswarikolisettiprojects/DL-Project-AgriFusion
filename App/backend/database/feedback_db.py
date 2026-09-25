@@ -230,7 +230,8 @@ def fetch_farmer_feedback_list(
         except Exception as err:
             corr_id = uuid.uuid4().hex[:8]
             logger.error(f"[FeedbackFetchError:{corr_id}] Supabase query failed: {err}")
-            raise RuntimeError(f"Database query failure (Ref: {corr_id}): {err}") from err
+            from fastapi import HTTPException
+            raise HTTPException(status_code=500, detail=f"Database query failure (Ref: {corr_id}): {err}") from err
     else:
         # SQLite fallback for local dev / test
         init_feedback_db()
