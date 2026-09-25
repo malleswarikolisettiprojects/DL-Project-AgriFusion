@@ -398,11 +398,13 @@ def generate_rag_remedies(query_label: str, crop: str = "crop") -> Dict[str, Any
     """
     query_lower = str(query_label).lower()
 
-    # ── 1. Real document search (primary) ──────────────────────────
+    matched_baseline = _match_baseline(query_lower)
+
+    # ── 1. Real document search (optional enhancement if baseline not matched) ──
     real_doc_hits = []
-    if REAL_DOC_RAG_OK:
+    if REAL_DOC_RAG_OK and not matched_baseline:
         try:
-            real_doc_hits = search_verified_documents(query_label, crop=crop, top_k=3)
+            real_doc_hits = search_verified_documents(query_label, crop=crop, top_k=1)
         except Exception as e:
             print(f"[RAG] Real-doc search error: {e}")
 
