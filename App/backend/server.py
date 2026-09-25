@@ -618,7 +618,7 @@ async def api_predict_disease(
             for d in (top_detections + secondary)
         ]
         try:
-            save_disease_prediction({
+            save_res = save_disease_prediction({
                 "user_id":                 user_id,
                 "user_email":              user_email,
                 "crop":                    crop,
@@ -632,6 +632,8 @@ async def api_predict_disease(
                 "all_detections":          all_detections,
                 "custom_crop_notice":      result.get("custom_crop_notice"),
             })
+            if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
+                logger.warning("[%s] Supabase disease telemetry save failed: %s", req_id, save_res.get("error") or "telemetry_saved is False")
         except Exception as db_err:
             logger.warning("[%s] Supabase disease log non-blocking warning: %s", req_id, db_err)
         duration_ms = round((time.time() - t0) * 1000, 2)

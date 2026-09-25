@@ -228,3 +228,67 @@ def test_secondary_matches_mapping_and_privacy_redaction(monkeypatch):
     assert "user_id" not in item
     assert "user_email" not in item
     assert data["summary_metrics"]["diagnoses_by_crop"]["Paddy"] == 1
+
+
+def test_save_disease_prediction_uses_admin_client(monkeypatch):
+    """Verify save_disease_prediction invokes create_supabase_admin_client for privileged insert."""
+    mock_admin = MagicMock()
+    mock_admin.table.return_value.insert.return_value.execute.return_value = MagicMock(data=[{"id": "test-uuid"}])
+
+    monkeypatch.setattr("App.backend.settings.create_supabase_admin_client", MagicMock(return_value=mock_admin))
+
+    from App.backend.database.save_predictions import save_disease_prediction
+
+    res = save_disease_prediction({
+        "crop": "Sugarcane",
+        "top_disease": "Red Rot",
+        "top_disease_confidence": 0.91,
+    })
+    assert res is not None
+    assert res.get("telemetry_saved") is True
+    assert mock_admin.table.called
+    assert mock_admin.table.call_args[0][0] == "disease_prediction"
+
+
+def test_predict_disease_route_logs_telemetry_failure(monkeypatch):
+    """Verify route returns farmer response and logs warning when save_disease_prediction returns telemetry_saved=False."""
+    fake_result = {
+        "top_detections": [{"label": "Paddy Blast", "confidence": 0.95, "source": "disease"}],
+        "secondary_detections": [],
+        "annotated_image_url": "https://storage.test/img.jpg",
+    }
+    monkeypatch.setattr("App.backend.server.predict_disease_and_pests", MagicMock(return_value=fake_result))
+
+    mock_save = MagicMock(return_value={"telemetry_saved": False, "error": "RLS policy violation"})
+    monkeypatch.setattr("App.backend.server.save_disease_prediction", mock_save)
+
+    files = {"image": ("leaf.jpg", io.BytesIO(b"fake_data"), "image/jpeg")}
+    data = {"crop": "Paddy"}
+
+    res = client.post("/api/v1/predict/disease", data=data, files=files)
+    assert res.status_code == 200
+    assert res.json().get("success") is True
+
+
+def test_state_district_unsupplied_not_invented(monkeypatch):
+    """Verify state and district are not invented when not provided in input payload."""
+    mock_admin = MagicMock()
+    insert_mock = MagicMock()
+    mock_admin.table.return_value.insert = insert_mock
+    insert_mock.return_value.execute.return_value = MagicMock(data=[{"id": "uuid-1"}])
+
+    monkeypatch.setattr("App.backend.settings.create_supabase_admin_client", MagicMock(return_value=mock_admin))
+
+    from App.backend.database.save_predictions import save_disease_prediction
+
+    save_disease_prediction({
+        "crop": "Maize",
+        "top_disease": "Common Rust",
+        "top_disease_confidence": 0.89,
+    })
+
+    assert insert_mock.called
+    payload = insert_mock.call_args[0][0]
+    assert "state" not in payload
+    assert "district" not in payload
+

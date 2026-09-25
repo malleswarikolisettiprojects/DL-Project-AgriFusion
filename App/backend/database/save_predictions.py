@@ -252,13 +252,25 @@ def save_market_prediction(data):
         return None
 
 
+def _get_admin_client():
+    try:
+        from App.backend.settings import create_supabase_admin_client
+        admin_c = create_supabase_admin_client()
+        if admin_c is not None:
+            return admin_c
+    except Exception:
+        pass
+    return supabase
+
+
 # ============================================================
 # 6. SAVE DISEASE / PEST / NUTRIENT DETECTION RESULT
 # ============================================================
 
 def save_disease_prediction(data):
-    if supabase is None:
-        return None
+    admin_client = _get_admin_client()
+    if admin_client is None:
+        return {"telemetry_saved": False, "error": "No Supabase client available"}
 
     now = datetime.now(timezone.utc).isoformat()
     user_id = data.get("user_id")
@@ -266,7 +278,7 @@ def save_disease_prediction(data):
     # 1. Save to user personal history (diagnostic_reports) if authenticated user_id present
     if user_id:
         try:
-            supabase.table("diagnostic_reports").insert({
+            admin_client.table("diagnostic_reports").insert({
                 "user_id": user_id,
                 "crop": data.get("crop") or "Unknown",
                 "image_storage_path": data.get("annotated_image_url"),
@@ -293,25 +305,34 @@ def save_disease_prediction(data):
         except Exception as e:
             print(f"Warning: Could not save disease prediction to prediction_records: {e}")
 
-    # 2. Save to disease_prediction telemetry table (authenticated or anonymous)
+    # 2. Save to disease_prediction telemetry table using server-only privileged admin client
     telemetry_saved = False
     try:
+        insert_payload = {
+            "user_email":              data.get("user_email"),
+            "crop":                    data.get("crop"),
+            "top_disease":             data.get("top_disease"),
+            "top_disease_confidence":  data.get("top_disease_confidence"),
+            "top_pest":                data.get("top_pest"),
+            "top_pest_confidence":     data.get("top_pest_confidence"),
+            "top_nutrient":            data.get("top_nutrient"),
+            "top_nutrient_confidence": data.get("top_nutrient_confidence"),
+            "annotated_image_url":     data.get("annotated_image_url"),
+            "all_detections":          data.get("all_detections"),
+            "custom_crop_notice":      data.get("custom_crop_notice"),
+        }
+        # Only set state/district if explicitly provided (do not invent default values)
+        if data.get("state"):
+            insert_payload["state"] = data.get("state")
+        if data.get("district"):
+            insert_payload["district"] = data.get("district")
+        if data.get("status"):
+            insert_payload["status"] = data.get("status")
+
         response = (
-            supabase
+            admin_client
             .table("disease_prediction")
-            .insert({
-                "user_email":              data.get("user_email"),
-                "crop":                    data.get("crop"),
-                "top_disease":             data.get("top_disease"),
-                "top_disease_confidence":  data.get("top_disease_confidence"),
-                "top_pest":                data.get("top_pest"),
-                "top_pest_confidence":     data.get("top_pest_confidence"),
-                "top_nutrient":            data.get("top_nutrient"),
-                "top_nutrient_confidence": data.get("top_nutrient_confidence"),
-                "annotated_image_url":     data.get("annotated_image_url"),
-                "all_detections":          data.get("all_detections"),
-                "custom_crop_notice":      data.get("custom_crop_notice"),
-            })
+            .insert(insert_payload)
             .execute()
         )
         if response and response.data:
