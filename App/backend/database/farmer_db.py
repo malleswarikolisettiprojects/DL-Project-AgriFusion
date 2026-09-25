@@ -377,21 +377,66 @@ def get_diagnostic_by_id(user_id: str, diagnostic_id: str) -> Optional[Dict[str,
     return None
 
 
-def get_all_diagnostics_for_admin(page: int = 1, page_size: int = 25) -> Dict[str, Any]:
-    """Fetch paginated diagnostic reports across all farmers for administrative audit review."""
+def get_all_diagnostics_for_admin(
+    page: int = 1,
+    page_size: int = 25,
+    crop: Optional[str] = None,
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    status: Optional[str] = None,
+    severity: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fetch paginated diagnostic reports across all farmers with filters for administrative review (non-PII)."""
+    page = max(1, page)
+    page_size = min(max(1, page_size), 100)
     offset = (page - 1) * page_size
+
     if supabase is None:
         return {"items": [], "page": page, "page_size": page_size, "total": 0}
     try:
-        res = (
-            supabase.table("diagnostic_reports")
-            .select("*", count="exact")
-            .order("created_at", desc=True)
-            .range(offset, offset + page_size - 1)
-            .execute()
-        )
-        total = res.count if res.count is not None else len(res.data or [])
-        return {"items": res.data or [], "page": page, "page_size": page_size, "total": total}
+        query = supabase.table("diagnostic_reports").select("*", count="exact")
+        if crop:
+            query = query.ilike("crop", f"%{crop}%")
+        if status:
+            query = query.eq("status", status)
+        if severity:
+            query = query.ilike("detection_results->>severity", f"%{severity}%")
+        if start_date:
+            query = query.gte("created_at", start_date)
+        if end_date:
+            query = query.lte("created_at", end_date)
+
+        res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+        raw_items = res.data or []
+        total = res.count if res.count is not None else len(raw_items)
+
+        items = []
+        for r in raw_items:
+            det = r.get("detection_results") if isinstance(r.get("detection_results"), dict) else {}
+            treatments = det.get("treatment_recommendations") or det.get("recommendations") or []
+            items.append({
+                "id": str(r.get("id")),
+                "created_at": r.get("created_at"),
+                "crop": r.get("crop") or "Unknown",
+                "state": r.get("state") or det.get("state") or "Andhra Pradesh",
+                "district": r.get("district") or det.get("district") or "Visakhapatnam",
+                "diagnosis": r.get("primary_diagnosis") or det.get("diagnosis") or "Healthy",
+                "confidence": float(r.get("confidence") or det.get("confidence") or 0.0),
+                "severity": det.get("severity") or "Normal",
+                "treatment_recommendations": treatments,
+                "status": r.get("status") or "reviewed",
+                "identity_redacted": True,
+            })
+
+        # Apply state/district filtering in memory if DB columns are nested
+        if state:
+            items = [i for i in items if i["state"].lower() == state.strip().lower()]
+        if district:
+            items = [i for i in items if i["district"].lower() == district.strip().lower()]
+
+        return {"items": items, "page": page, "page_size": page_size, "total": total}
     except Exception as e:
         logger.error(f"Error fetching admin diagnostics: {e}")
         return {"items": [], "page": page, "page_size": page_size, "total": 0}

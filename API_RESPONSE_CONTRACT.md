@@ -468,59 +468,71 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 
 ### 2.5 Admin Management & Aggregations (`/api/v1/admin/*`)
 
-#### `GET /api/v1/admin/dashboard` (alias `/api/v1/admin/overview`)
+#### 1. Overview Page (`GET /api/v1/admin/overview` / `/dashboard`)
 - **Auth**: Authenticated Admin (`require_admin`)
-- **Read/Write**: Read (`public.profiles`, `public.system_events`, `public.farmer_feedback`)
+- **Read/Write**: Read (`public.profiles`, `public.system_events`, `public.farms`, `public.farmer_feedback`)
+- **Query Params**: None
 - **Success Response (HTTP 200 OK)**:
   ```json
   {
-    "total_users": 1,
-    "active_farmers": 1,
-    "advisory_queries": 0,
-    "prediction_requests": 0,
-    "failed_requests": 0,
-    "feedback_awaiting_review": 0,
-    "services": {
-      "backend": "healthy",
-      "database": "healthy",
-      "rag_documents": "ready",
-      "models": "ready"
+    "success": true,
+    "generated_at": "2026-09-25T09:20:00Z",
+    "registered_users": 150,
+    "active_farmers": 142,
+    "farm_counts": 210,
+    "prediction_volume": 1250,
+    "advisory_volume": 840,
+    "pending_feedback": 12,
+    "failed_requests": 3,
+    "review_alerts": 15,
+    "service_health": {
+      "backend": {"status": "healthy", "message": "OK"},
+      "database": {"status": "healthy", "message": "Supabase connection verified"},
+      "models": {"status": "ready", "available_count": 6, "expected_count": 6},
+      "storage": {"status": "healthy", "message": "Storage bucket accessible"},
+      "rag_documents": {"status": "ready", "document_count": 12}
+    },
+    "trends": {
+      "predictions_daily": [{"date": "2026-09-25", "count": 1250}],
+      "advisories_daily": [{"date": "2026-09-25", "count": 840}]
+    },
+    "uncollected_metrics": ["realtime_cpu_gpu_memory_per_inference"]
+  }
+  ```
+
+#### 2. Users & RBAC Page (`GET /api/v1/admin/users`, `PATCH /api/v1/admin/users/{user_id}/*`)
+- **`GET /api/v1/admin/users`**: List user directory with pagination & search.
+  - **Auth**: Authenticated Admin (`require_admin`)
+  - **Params**: `role`, `status`, `search`, `page=1`, `page_size=25`
+  - **Success Response (HTTP 200 OK)**:
+    ```json
+    {
+      "items": [
+        {
+          "id": "c1f7a4e2-8b9a-4c2d-9e1f-8a2b3c4d5e6f",
+          "email": "farmer@agrifusion.com",
+          "full_name": "Ramesh Kumar",
+          "phone": "+919876543210",
+          "role": "farmer",
+          "status": "active",
+          "created_at": "2026-09-01T10:00:00Z",
+          "last_sign_in_at": "2026-09-24T18:00:00Z"
+        }
+      ],
+      "page": 1,
+      "page_size": 25,
+      "total": 1
     }
-  }
-  ```
+    ```
+- **`PATCH /api/v1/admin/users/{user_id}/status`**: Update user status (`active`, `suspended`, `archived`). Audits `user_status_changed`.
+- **`PATCH /api/v1/admin/users/{user_id}/role`**: Update user role (`super_admin`, `admin`, `auditor`, `agronomist`, `editor`, `farmer`). Checks last admin protection, audits `user_role_changed`.
 
-#### `GET /api/v1/admin/users`
-- **Auth**: Authenticated Admin (`require_admin`)
-- **Read/Write**: Read (`auth.users`, `public.profiles`)
-- **Params**: `role`, `status`, `search`, `page=1`, `limit=50`
-- **Success Response (HTTP 200 OK)**:
-  ```json
-  {
-    "items": [
-      {
-        "id": "c1f7a4e2-8b9a-4c2d-9e1f-8a2b3c4d5e6f",
-        "email": "farmer@agrifusion.com",
-        "full_name": "Ramesh Kumar",
-        "phone": "+919876543210",
-        "role": "farmer",
-        "status": "active",
-        "created_at": "2026-09-01T10:00:00Z",
-        "last_sign_in_at": "2026-09-24T18:00:00Z",
-        "farms_count": 1
-      }
-    ],
-    "total": 1,
-    "page": 1,
-    "limit": 50,
-    "pages": 1
-  }
-  ```
-
-#### `GET /api/v1/admin/farms`
+#### 3. Farms & Coverage Page (`GET /api/v1/admin/farms`)
 - **Auth**: Authenticated Admin (`require_admin`)
 - **Read/Write**: Read (`public.farms`)
 - **Params**: `state`, `district`, `crop`, `irrigation_type`, `min_group_threshold=5` (default 5, min 1), `page=1`, `page_size=25`
-- **Privacy Rules**: Aggregate cohort grouping ONLY. Identifying fields (`id`, `user_id`, `name`, `village`, `latitude`, `longitude`) are strictly excluded.
+- **Privacy Rules**: Grouped cohort aggregation ONLY. PII fields (`id`, `user_id`, `name`, `village`, `latitude`, `longitude`) are strictly excluded.
+- **Cohort Threshold Handling**: Matching groups with < 5 records are suppressed.
 - **Success Response (HTTP 200 OK)**:
   ```json
   {
@@ -540,92 +552,167 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
     "privacy_note": "Only minimized regional farm information is shown."
   }
   ```
-- **Empty / Suppressed Groups Response**:
-  ```json
-  {
-    "items": [],
-    "page": 1,
-    "page_size": 25,
-    "total": 0,
-    "suppressed_groups": 1,
-    "privacy_note": "All 1 regional farm group(s) were suppressed because they had fewer than 5 record(s)."
-  }
-  ```
 
-#### `GET /api/v1/admin/feedback`
+#### 4. Predictions Analytics Page (`GET /api/v1/admin/predictions`)
 - **Auth**: Authenticated Admin (`require_admin`)
-- **Read/Write**: Read (`public.farmer_feedback`)
-- **Params**: `status`, `category`, `priority`, `page=1`, `page_size=25`
+- **Params**: `prediction_type`, `state`, `district`, `crop`, `status`, `start_date`, `end_date`, `page=1`, `page_size=25`
 - **Success Response (HTTP 200 OK)**:
   ```json
   {
-    "items": [],
+    "items": [
+      {
+        "id": "pred-101",
+        "prediction_type": "crop_recommendation",
+        "status": "completed",
+        "latency_ms": 142.5,
+        "request_payload": {"state": "Andhra Pradesh", "district": "Visakhapatnam"},
+        "result_payload": {"top_crop": "Rice"},
+        "created_at": "2026-09-25T08:30:00Z"
+      }
+    ],
     "page": 1,
     "page_size": 25,
-    "total": 0,
-    "rating_distribution": {
-      "1": 0,
-      "2": 0,
-      "3": 0,
-      "4": 0,
-      "5": 0
+    "total": 1,
+    "analytics": {
+      "total_predictions": 1,
+      "success_count": 1,
+      "error_count": 0,
+      "average_latency_ms": 142.5,
+      "by_type": {
+        "crop_recommendation": 1,
+        "climate_risk": 0,
+        "irrigation_schedule": 0,
+        "yield_forecast": 0,
+        "market_price": 0,
+        "disease_detection": 0,
+        "pipeline": 0
+      },
+      "trends": [{"date": "2026-09-25", "count": 1}]
+    },
+    "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from persisted system event ledgers."
+  }
+  ```
+
+#### 5. Advisory Activity & Quality Page (`GET /api/v1/admin/advisories`)
+- **Auth**: Authenticated Admin (`require_admin`)
+- **Params**: `crop`, `state`, `district`, `status`, `review_status`, `start_date`, `end_date`, `page=1`, `page_size=25`
+- **Success Response (HTTP 200 OK)**:
+  ```json
+  {
+    "items": [
+      {
+        "query_id": "adv-8f3a9b1c",
+        "created_at": "2026-09-25T07:15:00Z",
+        "crop": "Paddy",
+        "state": "Andhra Pradesh",
+        "district": "Visakhapatnam",
+        "query_summary": "How to prevent paddy stem borer?",
+        "activity_status": "success",
+        "review_status": "not_reviewed",
+        "retrieval": {
+          "documents_considered": 3,
+          "documents_used": 1,
+          "relevance_threshold_passed": true,
+          "no_verified_source": false
+        },
+        "sources": [
+          {
+            "title": "ICAR Rice Pest Handbook",
+            "organization": "ICAR",
+            "url": "https://icar.org.in",
+            "verified_date": "2026-01-15"
+          }
+        ],
+        "compliance": {
+          "citations_present": true,
+          "compliance_status": "passed"
+        }
+      }
+    ],
+    "page": 1,
+    "page_size": 25,
+    "total": 1,
+    "privacy_note": "Farmer advisory query context is presented in anonymized form."
+  }
+  ```
+- **Mutations**:
+  - `PATCH /api/v1/admin/advisories/{query_id}/review`: Updates review status (`needs_review`, `reviewed`, `resolved`).
+  - `POST /api/v1/admin/advisories/{query_id}/note`: Attaches administrative note.
+
+#### 6. Knowledge Sources Page (`GET /api/v1/admin/sources`, `POST /sources/upload-document`)
+- **`GET /api/v1/admin/sources`**: Searchable source registry with verification and indexing metadata.
+- **`POST /api/v1/admin/sources/register`**: Register new official publication or URL.
+- **`POST /api/v1/admin/sources/upload-document`**: Multipart document upload (PDF, DOCX, TXT, MD, <= 15MB). Saves to `Data/agronomy_docs/`, registers in DB registry, forces RAG document reload, and logs audit event.
+- **`PATCH /api/v1/admin/sources/{source_id}`**: Update verification status (`pending_review`, `verified`, `verified_with_caveats`, `needs_review`, `stale`, `unavailable`, `rejected`), caveats, and active flag.
+- **`POST /api/v1/admin/sources/{source_id}/reindex`**: Queue single source reindexing.
+- **`POST /api/v1/admin/knowledge-sources/sync`**: Trigger bulk RAG document re-indexing.
+
+#### 7. Government Schemes Page (`GET /api/v1/admin/schemes`)
+- **`GET /api/v1/admin/schemes`**: Paginated schemes catalog. Filters: `state`, `district`, `department`, `scheme_type`, `verification_status`, `current_status`, `search`.
+- **`POST /api/v1/admin/schemes/register`**: Register new central/state scheme.
+- **`POST /api/v1/admin/schemes/{scheme_id}/verify`**: Officially verify scheme using portal source URL and notes.
+- **`POST /api/v1/admin/schemes/{scheme_id}/recheck`**: Request scheme re-verification review.
+- **`PATCH /api/v1/admin/schemes/{scheme_id}`**: Update scheme verification/current status.
+- **`DELETE /api/v1/admin/schemes/{scheme_id}`**: Remove scheme record.
+
+#### 8. Feedback & Review Queue Page (`GET /api/v1/admin/feedback`)
+- **`GET /api/v1/admin/feedback`**: Paginated farmer feedback list with rating distribution. Filters: `status`, `category`, `priority`, `rating`, `assigned_to`, `start_date`, `end_date`, `search`.
+- **`GET /api/v1/admin/feedback/{feedback_id}`**: Detail view with note history and compliance checks.
+- **`PATCH /api/v1/admin/feedback/{feedback_id}`**: Update status, priority, or `assigned_to` reviewer.
+- **`POST /api/v1/admin/feedback/{feedback_id}/note`**: Attach review note.
+
+#### 9. Diagnostics & Reports Page (`GET /api/v1/admin/diagnostics`)
+- **Auth**: Authenticated Admin (`require_admin`)
+- **Params**: `crop`, `state`, `district`, `status`, `severity`, `start_date`, `end_date`, `page=1`, `page_size=25`
+- **Success Response (HTTP 200 OK)**:
+  ```json
+  {
+    "items": [
+      {
+        "id": "diag-101",
+        "created_at": "2026-09-25T06:00:00Z",
+        "crop": "Rice",
+        "state": "Andhra Pradesh",
+        "district": "Visakhapatnam",
+        "diagnosis": "Rice Blast",
+        "confidence": 0.94,
+        "severity": "Moderate",
+        "treatment_recommendations": ["Apply Tricyclazole 75% WP"],
+        "status": "reviewed",
+        "identity_redacted": true
+      }
+    ],
+    "page": 1,
+    "page_size": 25,
+    "total": 1,
+    "privacy_note": "Diagnostic records are presented with farmer identity minimized."
+  }
+  ```
+
+#### 10. System Health Page (`GET /api/v1/admin/system-health`)
+- **Auth**: Authenticated Admin (`require_admin`)
+- **Success Response (HTTP 200 OK)**:
+  ```json
+  {
+    "overall_status": "healthy",
+    "checked_at": "2026-09-25T09:20:00Z",
+    "services": {
+      "api": {"status": "healthy", "latency_ms": 1.2, "last_check": "2026-09-25T09:20:00Z", "error_summary": null},
+      "database": {"status": "healthy", "latency_ms": 2.5, "last_check": "2026-09-25T09:20:00Z", "error_summary": null},
+      "models": {"status": "ready", "latency_ms": 3.1, "last_check": "2026-09-25T09:20:00Z", "available_count": 6, "expected_count": 6, "models": {"crop_recommendation": "ready", "climate_risk": "ready", "irrigation": "ready", "yield": "ready", "market_price": "ready", "object_detection": "ready"}, "error_summary": null},
+      "storage": {"status": "healthy", "latency_ms": 1.8, "last_check": "2026-09-25T09:20:00Z", "bucket_name": "crop-images", "error_summary": null},
+      "rag": {"status": "ready", "latency_ms": 2.0, "last_check": "2026-09-25T09:20:00Z", "document_count": 12, "error_summary": null}
     }
   }
   ```
 
-#### `GET /api/v1/admin/knowledge-sources`
-- **Auth**: Authenticated Admin (`require_admin`)
-- **Read/Write**: Read (`public.knowledge_sources`)
-- **Success Response (HTTP 200 OK)**:
-  ```json
-  {
-    "items": [],
-    "page": 1,
-    "page_size": 25,
-    "total": 0,
-    "privacy_note": "Knowledge sources listing."
-  }
-  ```
+#### 11. Audit Logs Page (`GET /api/v1/admin/audit-logs`, `GET /export`)
+- **`GET /api/v1/admin/audit-logs`**: Paginated audit log trail. Filters: `admin_user_id`, `action`, `target_type`, `start_date`, `end_date`, `page=1`, `page_size=25`.
+- **`GET /api/v1/admin/audit-logs/export`**: Download CSV export. Excludes passwords, tokens, and secrets.
 
-#### `POST /api/v1/admin/knowledge-sources/sync`
-- **Auth**: Authenticated Admin (`require_admin`)
-- **Read/Write**: Write (`public.admin_audit_logs`)
-- **Description**: Triggers idempotent re-indexing of agronomy knowledge documents.
-- **Success Response (HTTP 200 OK)**:
-  ```json
-  {
-    "status": "success",
-    "message": "Agronomy knowledge documents re-indexed successfully.",
-    "documents_indexed": 12
-  }
-  ```
-
-#### `GET /api/v1/admin/schemes`
-- **Auth**: Authenticated Admin (`require_admin`)
-- **Read/Write**: Read (`public.government_schemes`)
-- **Success Response (HTTP 200 OK)**:
-  ```json
-  {
-    "items": [],
-    "page": 1,
-    "page_size": 25,
-    "total": 0,
-    "privacy_note": "Government schemes catalog."
-  }
-  ```
-
-#### `GET /api/v1/admin/activity`
-- **Auth**: Authenticated Admin (`require_admin`)
-- **Read/Write**: Read (`public.admin_audit_logs`)
-- **Success Response (HTTP 200 OK)**:
-  ```json
-  {
-    "items": [],
-    "page": 1,
-    "page_size": 25,
-    "total": 0
-  }
-  ```
+#### 12. Settings & Permissions Page (`GET /api/v1/admin/settings`, `PATCH /settings`)
+- **`GET /api/v1/admin/settings`**: Retrieves current system configuration, role permissions matrix, alert thresholds, and integration statuses.
+- **`PATCH /api/v1/admin/settings`**: Updates configurable settings (`cohort_privacy_threshold`, `log_retention_days`, `alert_error_rate_percent`, `alert_latency_p95_ms`, `pii_redaction_enabled`, `maintenance_mode`). Restricted to `super_admin` or `admin`. Records audit log `system_settings_updated`.
 
 ---
 
@@ -637,3 +724,4 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 
 2. **Error Responses**:
    - All errors use standard status codes (`401`, `403`, `404`, `422`, `500`) and standard JSON payload `{ "success": false, "stage": "...", "error_code": "...", "message": "..." }`. Frontend code should inspect `res.status` and `data.message`.
+

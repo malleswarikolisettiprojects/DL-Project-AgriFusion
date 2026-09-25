@@ -56,11 +56,21 @@ def init_feedback_db():
             language              TEXT DEFAULT 'English',
             status                TEXT DEFAULT 'new',
             priority              TEXT DEFAULT 'normal',
+            assigned_to           TEXT,
             admin_note_count      INTEGER DEFAULT 0,
             resolved_at           TIMESTAMP,
             resolved_by_admin_id  TEXT
         )
     """)
+    # Migration: add assigned_to if missing
+    cursor.execute("PRAGMA table_info(farmer_feedback)")
+    cols = [col["name"] for col in cursor.fetchall()]
+    if "assigned_to" not in cols:
+        try:
+            cursor.execute("ALTER TABLE farmer_feedback ADD COLUMN assigned_to TEXT")
+        except Exception:
+            pass
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS feedback_review_notes (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -145,6 +155,7 @@ def fetch_farmer_feedback_list(
     category: Optional[str] = None,
     priority: Optional[str] = None,
     rating: Optional[int] = None,
+    assigned_to: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     search: Optional[str] = None,
@@ -166,6 +177,8 @@ def fetch_farmer_feedback_list(
                 q = q.eq("priority", priority)
             if rating:
                 q = q.eq("rating", rating)
+            if assigned_to:
+                q = q.eq("assigned_to", assigned_to)
             res = q.execute()
             if res.data:
                 rows_data = res.data
@@ -190,6 +203,9 @@ def fetch_farmer_feedback_list(
             if rating:
                 query += " AND rating = ?"
                 params.append(rating)
+            if assigned_to:
+                query += " AND assigned_to = ?"
+                params.append(assigned_to)
 
             query += " ORDER BY created_at DESC"
             cursor.execute(query, params)
@@ -234,6 +250,7 @@ def fetch_farmer_feedback_list(
             "language": r.get("language") or "English",
             "status": r.get("status") or "new",
             "priority": r.get("priority") or "normal",
+            "assigned_to": r.get("assigned_to"),
             "admin_note_count": r.get("admin_note_count") or 0,
             "identity_redacted": True,
         })
@@ -313,6 +330,7 @@ def get_farmer_feedback_detail(feedback_id: str) -> Optional[Dict[str, Any]]:
         "language": r.get("language") or "English",
         "status": r.get("status") or "new",
         "priority": r.get("priority") or "normal",
+        "assigned_to": r.get("assigned_to"),
         "admin_note_count": len(notes),
         "resolved_at": r.get("resolved_at"),
         "resolved_by_admin_id": r.get("resolved_by_admin_id"),
@@ -327,8 +345,9 @@ def update_farmer_feedback_record(
     admin_user_id: str,
     status: Optional[str] = None,
     priority: Optional[str] = None,
+    assigned_to: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Update status and/or priority of a feedback record."""
+    """Update status, priority, and/or assigned_to of a feedback record."""
     existing = get_farmer_feedback_detail(feedback_id)
     if not existing:
         return None
@@ -336,6 +355,7 @@ def update_farmer_feedback_record(
     now_iso = datetime.now(timezone.utc).isoformat()
     new_status = status if status is not None else existing["status"]
     new_priority = priority if priority is not None else existing["priority"]
+    new_assigned_to = assigned_to if assigned_to is not None else existing.get("assigned_to")
 
     resolved_at = existing.get("resolved_at")
     resolved_by_admin_id = existing.get("resolved_by_admin_id")
@@ -350,6 +370,7 @@ def update_farmer_feedback_record(
     updates = {
         "status": new_status,
         "priority": new_priority,
+        "assigned_to": new_assigned_to,
         "updated_at": now_iso,
         "resolved_at": resolved_at,
         "resolved_by_admin_id": resolved_by_admin_id,
@@ -367,9 +388,9 @@ def update_farmer_feedback_record(
         cursor = conn.cursor()
         cursor.execute("""
             UPDATE farmer_feedback
-            SET status = ?, priority = ?, updated_at = ?, resolved_at = ?, resolved_by_admin_id = ?
+            SET status = ?, priority = ?, assigned_to = ?, updated_at = ?, resolved_at = ?, resolved_by_admin_id = ?
             WHERE id = ?
-        """, (new_status, new_priority, now_iso, resolved_at, resolved_by_admin_id, feedback_id))
+        """, (new_status, new_priority, new_assigned_to, now_iso, resolved_at, resolved_by_admin_id, feedback_id))
         conn.commit()
         conn.close()
     except Exception:
@@ -379,6 +400,7 @@ def update_farmer_feedback_record(
         "id": feedback_id,
         "status": new_status,
         "priority": new_priority,
+        "assigned_to": new_assigned_to,
         "updated_at": now_iso,
         "resolved_at": resolved_at,
         "resolved_by_admin_id": resolved_by_admin_id,
