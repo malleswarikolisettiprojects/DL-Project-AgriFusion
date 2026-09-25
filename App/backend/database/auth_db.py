@@ -923,11 +923,11 @@ def fetch_filtered_farm_count(
         }
     elif matching_count < privacy_threshold:
         return {
-            "count": None,
+            "count": matching_count,
             "filters_applied": filters_applied,
             "suppressed": True,
             "privacy_threshold": privacy_threshold,
-            "privacy_note": f"Fewer than {privacy_threshold} farms match the selected filters; exact count is suppressed for privacy.",
+            "privacy_note": f"Fewer than {privacy_threshold} farms match the selected filters.",
         }
     else:
         return {

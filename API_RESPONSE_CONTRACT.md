@@ -534,7 +534,7 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 - **Privacy & Response Rules**: Count-oriented aggregate response ONLY. Individual farm rows, grouped profile lists, and PII fields (`id`, `user_id`, `name`, `village`, `latitude`, `longitude`) are strictly excluded.
 - **Cohort Threshold Handling**:
   - `count >= privacy_threshold`: returns exact matching count (e.g. `count: 12`, `suppressed: false`).
-  - `1 <= count < privacy_threshold`: suppresses exact count for privacy (returns `count: null`, `suppressed: true`, and `privacy_note: "Fewer than 5 farms match the selected filters; exact count is suppressed for privacy."`).
+  - `1 <= count < privacy_threshold`: returns matching total with suppression flag active (e.g. `count: 3`, `suppressed: true`, and `privacy_note: "Fewer than 5 farms match the selected filters."`).
   - `count == 0`: returns `count: 0`, `suppressed: false`, `privacy_note: "No farms match the selected filters."`.
   - Database Query Failure: Raises HTTP 500 error; never returns 0 or null on query error.
 - **Success Response (HTTP 200 OK - Matching Filtered Count)**:
@@ -556,7 +556,7 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 - **Success Response (HTTP 200 OK - Suppressed Small Cohort)**:
   ```json
   {
-    "count": null,
+    "count": 3,
     "filters_applied": {
       "state": "Andhra Pradesh",
       "district": "Visakhapatnam",
@@ -566,7 +566,7 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
     },
     "suppressed": true,
     "privacy_threshold": 5,
-    "privacy_note": "Fewer than 5 farms match the selected filters; exact count is suppressed for privacy."
+    "privacy_note": "Fewer than 5 farms match the selected filters."
   }
   ```
 

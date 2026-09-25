@@ -321,9 +321,9 @@ class AdminFarmsCountFilters(BaseModel):
 
 
 class AdminFarmsCountResponse(BaseModel):
-    count: Optional[int] = Field(
-        None,
-        description="Total number of farms matching the selected filters. Returns null if suppressed due to cohort privacy threshold."
+    count: int = Field(
+        ...,
+        description="Total number of farms matching the selected filters."
     )
     filters_applied: AdminFarmsCountFilters = Field(
         ...,
@@ -331,11 +331,11 @@ class AdminFarmsCountResponse(BaseModel):
     )
     suppressed: bool = Field(
         ...,
-        description="True if matching count is between 1 and privacy_threshold - 1, suppressing exact count for privacy."
+        description="True if matching count is fewer than privacy_threshold."
     )
     privacy_threshold: int = Field(
         5,
-        description="Minimum matching cohort size required to reveal exact count."
+        description="Minimum matching cohort size threshold."
     )
     privacy_note: str = Field(
         ...,

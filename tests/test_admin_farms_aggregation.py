@@ -98,7 +98,7 @@ def test_farms_present_count_meets_threshold():
 # 3. Small Cohort Suppressed by Privacy Threshold
 # -----------------------------------------------------------------------------
 def test_farms_present_but_suppressed():
-    """Verify matching count < privacy_threshold returns count: null, suppressed: true."""
+    """Verify matching count < privacy_threshold returns count: 3, suppressed: true."""
     mock_supabase = MagicMock()
     mock_farms_table = MagicMock()
     mock_supabase.table.return_value = mock_farms_table
@@ -113,10 +113,10 @@ def test_farms_present_but_suppressed():
 
     with patch("App.backend.database.auth_db._get_supabase_admin", return_value=mock_supabase):
         res = fetch_filtered_farm_count(state="Andhra Pradesh", district="Visakhapatnam", privacy_threshold=5)
-        assert res["count"] is None
+        assert res["count"] == 3
         assert res["suppressed"] is True
         assert res["privacy_threshold"] == 5
-        assert "suppressed for privacy" in res["privacy_note"]
+        assert "Fewer than 5 farms match" in res["privacy_note"]
 
 
 # -----------------------------------------------------------------------------
