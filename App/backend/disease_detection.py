@@ -42,6 +42,16 @@ AI_DISCLAIMER_TEXT = (
 
 supabase = create_supabase_client()
 
+def _get_admin_client():
+    try:
+        from App.backend.settings import create_supabase_admin_client
+        admin_c = create_supabase_admin_client()
+        if admin_c is not None:
+            return admin_c
+    except Exception:
+        pass
+    return supabase
+
 app = FastAPI(title="Crop Disease & Pest Multi-Provider Inference API", version="3.1.0")
 
 # Registered Crop Models with verified Roboflow Universe and Local PyTorch weights
@@ -61,6 +71,11 @@ CROP_MODELS: dict[str, list[dict[str, str]]] = {
         {"provider": "roboflow", "name": "melon-disease-j55st", "model_id": "melon-disease-j55st/5", "url": "https://universe.roboflow.com/choza-q6p0q/melon-disease-j55st"},
     ],
     "rice": [
+        {"provider": "roboflow", "name": "pests-wropv", "model_id": "pests-wropv/3", "url": "https://universe.roboflow.com/ali-s5zbn/pests-wropv"},
+        {"provider": "roboflow", "name": "rice-leaf-disease-s1asn", "model_id": "rice-leaf-disease-s1asn/2", "url": "https://universe.roboflow.com/riceleafdiseasedetection/rice-leaf-disease-s1asn"},
+        {"provider": "roboflow", "name": "rice-i9qwz", "model_id": "rice-i9qwz/2", "url": "https://universe.roboflow.com/rice-pest/rice-i9qwz"},
+    ],
+    "paddy": [
         {"provider": "roboflow", "name": "pests-wropv", "model_id": "pests-wropv/3", "url": "https://universe.roboflow.com/ali-s5zbn/pests-wropv"},
         {"provider": "roboflow", "name": "rice-leaf-disease-s1asn", "model_id": "rice-leaf-disease-s1asn/2", "url": "https://universe.roboflow.com/riceleafdiseasedetection/rice-leaf-disease-s1asn"},
         {"provider": "roboflow", "name": "rice-i9qwz", "model_id": "rice-i9qwz/2", "url": "https://universe.roboflow.com/rice-pest/rice-i9qwz"},
@@ -387,10 +402,11 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     storage_path = f"{datetime.now(timezone.utc):%Y/%m/%d}/{prediction_id}.{extension}"
     image_url = ""
 
-    if supabase:
+    admin_client = _get_admin_client()
+    if admin_client:
         try:
-            supabase.storage.from_(SUPABASE_BUCKET).upload(storage_path, raw, {"content-type": content_type, "upsert": "false"})
-            image_url = supabase.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
+            admin_client.storage.from_(SUPABASE_BUCKET).upload(storage_path, raw, {"content-type": content_type, "upsert": "false"})
+            image_url = admin_client.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
         except Exception as exc:
             print(f"Warning: Supabase Storage upload skipped/failed: {exc}")
 
