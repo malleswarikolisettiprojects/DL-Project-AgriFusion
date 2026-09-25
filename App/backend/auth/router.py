@@ -26,8 +26,35 @@ async def login(payload: LoginRequest):
     Authenticate user via Supabase Auth or backend user database.
     Returns authenticated session details and role information.
     """
-    email_clean = payload.email.strip().lower()
+    email_raw = payload.email.strip()
+    email_clean = email_raw.lower()
     
+    # 0. Check admin environment credentials
+    from App.backend.database.auth_db import verify_admin
+    if verify_admin(email_raw, payload.password) or verify_admin(email_clean, payload.password):
+        import time, jwt, os
+        secret = os.getenv("SUPABASE_JWT_SECRET") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or "agrifusion_admin_secret_key"
+        now = int(time.time())
+        claims = {
+            "sub": "00000000-0000-0000-0000-000000000001",
+            "email": email_raw,
+            "aud": "authenticated",
+            "role": "authenticated",
+            "app_metadata": {"role": "admin"},
+            "user_metadata": {"role": "admin"},
+            "iat": now,
+            "exp": now + 86400,
+        }
+        token = jwt.encode(claims, secret, algorithm="HS256")
+        return {
+            "authenticated": True,
+            "access_token": token,
+            "token_type": "bearer",
+            "user_id": claims["sub"],
+            "email": claims["email"],
+            "role": "admin",
+        }
+
     # 1. Try Supabase Auth API if configured
     if supabase is not None:
         try:
