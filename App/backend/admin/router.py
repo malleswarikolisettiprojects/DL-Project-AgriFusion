@@ -1192,12 +1192,15 @@ async def get_admin_feedback_list(
     """
     Retrieve paginated farmer feedback with identity minimized, reviewer assignment filters, and rating distributions.
     """
-    await record_audit_event(
-        admin_user_id=admin_user.id,
-        action="feedback_list_viewed",
-        target_type="farmer_feedback",
-        safe_metadata={"page": page, "page_size": page_size, "status": status, "priority": priority, "assigned_to": assigned_to},
-    )
+    try:
+        await record_audit_event(
+            admin_user_id=admin_user.id,
+            action="feedback_list_viewed",
+            target_type="farmer_feedback",
+            safe_metadata={"page": page, "page_size": page_size, "status": status, "priority": priority, "assigned_to": assigned_to},
+        )
+    except Exception as exc:
+        logger.warning(f"Audit log failed during feedback list view: {exc}")
 
     data = fetch_farmer_feedback_list(
         page=page,
