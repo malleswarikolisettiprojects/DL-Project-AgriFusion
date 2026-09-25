@@ -408,47 +408,80 @@ def get_all_diagnostics_for_admin(
 
     if SUPABASE_URL:
         if admin_supabase is None:
-            logger.error("Supabase configured but admin client unavailable for diagnostic_reports read.")
+            logger.error("Supabase configured but admin client unavailable for diagnostics read.")
             raise RuntimeError("Database query failed for admin diagnostics")
+
+        raw_items = []
+        total = 0
+        is_disease_pred_source = True
+
         try:
-            query = admin_supabase.table("diagnostic_reports").select("*", count="exact")
+            query = admin_supabase.table("disease_prediction").select("*", count="exact")
             if crop:
                 query = query.ilike("crop", f"%{crop}%")
             effective_status = status or review_status
             if effective_status:
                 query = query.eq("status", effective_status)
-            if severity:
-                query = query.ilike("detection_results->>severity", f"%{severity}%")
             if start_date:
                 query = query.gte("created_at", start_date)
             if end_date:
                 query = query.lte("created_at", end_date)
 
             res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
-            if res.data is None:
-                logger.error("Supabase diagnostic_reports query returned None data")
-                raise RuntimeError("Database query failed for admin diagnostics")
+            if res.data is not None:
+                raw_items = res.data or []
+                total = res.count if res.count is not None else len(raw_items)
 
-            raw_items = res.data or []
-            total = res.count if res.count is not None else len(raw_items)
+            # Fallback to diagnostic_reports if disease_prediction returns 0 rows and no specific filters applied
+            if total == 0 and not crop and not start_date and not end_date:
+                try:
+                    fallback_res = admin_supabase.table("diagnostic_reports").select("*", count="exact").order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
+                    if fallback_res.data and len(fallback_res.data) > 0:
+                        raw_items = fallback_res.data
+                        total = fallback_res.count if fallback_res.count is not None else len(raw_items)
+                        is_disease_pred_source = False
+                except Exception as fb_err:
+                    logger.debug("Fallback read on diagnostic_reports skipped: %s", fb_err)
 
             items = []
             for r in raw_items:
-                det = r.get("detection_results") if isinstance(r.get("detection_results"), dict) else {}
-                treatments = det.get("treatment_recommendations") or det.get("recommendations") or []
-                item_dict = {
-                    "id": str(r.get("id")),
-                    "created_at": r.get("created_at"),
-                    "crop": r.get("crop") or "Unknown",
-                    "state": r.get("state") or det.get("state") or "Andhra Pradesh",
-                    "district": r.get("district") or det.get("district") or "Visakhapatnam",
-                    "diagnosis": r.get("primary_diagnosis") or det.get("diagnosis") or "Healthy",
-                    "confidence": float(r.get("confidence") or det.get("confidence") or 0.0),
-                    "severity": det.get("severity") or "Normal",
-                    "treatment_recommendations": treatments,
-                    "status": r.get("status") or "reviewed",
-                    "identity_redacted": True,
-                }
+                if is_disease_pred_source and "top_disease" in r:
+                    diag_name = r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient") or "Diagnosed"
+                    conf_val = float(r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence") or 0.9)
+                    all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
+                    treatments = [d.get("label") for d in all_det if isinstance(d, dict) and d.get("label")]
+                    if not treatments:
+                        treatments = ["Consult local agronomist or KVK expert."]
+                    
+                    item_dict = {
+                        "id": str(r.get("id")),
+                        "created_at": r.get("created_at"),
+                        "crop": r.get("crop") or "Unknown",
+                        "state": r.get("state") or "Andhra Pradesh",
+                        "district": r.get("district") or "Visakhapatnam",
+                        "diagnosis": diag_name,
+                        "confidence": conf_val,
+                        "severity": "Normal",
+                        "treatment_recommendations": treatments,
+                        "status": r.get("status") or "reviewed",
+                        "identity_redacted": True,
+                    }
+                else:
+                    det = r.get("detection_results") if isinstance(r.get("detection_results"), dict) else {}
+                    treatments = det.get("treatment_recommendations") or det.get("recommendations") or []
+                    item_dict = {
+                        "id": str(r.get("id")),
+                        "created_at": r.get("created_at"),
+                        "crop": r.get("crop") or "Unknown",
+                        "state": r.get("state") or det.get("state") or "Andhra Pradesh",
+                        "district": r.get("district") or det.get("district") or "Visakhapatnam",
+                        "diagnosis": r.get("primary_diagnosis") or det.get("diagnosis") or "Healthy",
+                        "confidence": float(r.get("confidence") or det.get("confidence") or 0.0),
+                        "severity": det.get("severity") or "Normal",
+                        "treatment_recommendations": treatments,
+                        "status": r.get("status") or "reviewed",
+                        "identity_redacted": True,
+                    }
                 items.append(item_dict)
 
             # Apply in-memory state/district/search filters if needed
@@ -469,7 +502,7 @@ def get_all_diagnostics_for_admin(
 
             return {"items": items, "page": page, "page_size": page_size, "total": total}
         except Exception as exc:
-            logger.error("Supabase diagnostic_reports read failure: %s", exc)
+            logger.error("Supabase diagnostics read failure: %s", exc)
             raise RuntimeError("Database query failed for admin diagnostics") from exc
     else:
         # Standalone testing mode without SUPABASE_URL configured

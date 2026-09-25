@@ -592,4 +592,40 @@ USING (
   )
 );
 
+-- -----------------------------------------------------------------------------
+-- 13. Disease Prediction Telemetry Table (All Inference Events & Admin Audit)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.disease_prediction (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    user_email TEXT,
+    crop TEXT,
+    top_disease TEXT,
+    top_disease_confidence NUMERIC(5, 4),
+    top_pest TEXT,
+    top_pest_confidence NUMERIC(5, 4),
+    top_nutrient TEXT,
+    top_nutrient_confidence NUMERIC(5, 4),
+    annotated_image_url TEXT,
+    all_detections JSONB DEFAULT '[]'::jsonb,
+    custom_crop_notice TEXT,
+    state TEXT DEFAULT 'Andhra Pradesh',
+    district TEXT DEFAULT 'Visakhapatnam',
+    status TEXT DEFAULT 'reviewed'
+);
+
+CREATE INDEX IF NOT EXISTS idx_disease_pred_created_at ON public.disease_prediction(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_disease_pred_crop ON public.disease_prediction(crop);
+
+ALTER TABLE public.disease_prediction ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admins read and write disease prediction" ON public.disease_prediction;
+CREATE POLICY "Admins read and write disease prediction" ON public.disease_prediction FOR ALL
+USING (
+  auth.role() = 'service_role' OR EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE profiles.id = auth.uid()
+    AND profiles.role IN ('admin', 'super_admin', 'auditor', 'agronomist', 'editor')
+  )
+);
+
 
