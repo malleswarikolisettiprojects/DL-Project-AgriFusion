@@ -155,3 +155,50 @@ def test_get_all_diagnostics_for_admin_contract():
     assert sec1["label"] == "Rice Stem Borer"
     assert sec1["confidence"] == 0.785
     assert sec1["category"] == "pest"
+
+
+def test_api_predict_disease_route_mapping(realistic_inference_result):
+    """Verify POST /api/v1/predict/disease correctly maps predict_disease_and_pests() return values into save_disease_prediction."""
+    from App.backend.server import api_predict_disease
+    import asyncio
+
+    mock_image = MagicMock()
+    mock_image.filename = "rice_leaf.jpg"
+    mock_image.content_type = "image/jpeg"
+    mock_image.read = MagicMock(side_effect=lambda: asyncio.sleep(0.001) or b"fake_bytes")
+
+    with patch("App.backend.server.predict_disease_and_pests", return_value=realistic_inference_result), \
+         patch("App.backend.server.save_disease_prediction") as mock_save:
+        
+        mock_save.return_value = {"telemetry_saved": True, "event_id": "evt-123"}
+        
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            response = loop.run_until_complete(
+                api_predict_disease(crop="Rice", image=mock_image, current_user=None)
+            )
+        finally:
+            loop.close()
+
+    assert response["success"] is True
+    assert response["result"]["primary_diagnosis"] == "Rice Blast"
+    assert response["result"]["top_confidence"] == 0.9421
+
+    mock_save.assert_called_once()
+    saved_data = mock_save.call_args[0][0]
+
+    assert saved_data["primary_diagnosis"] == "Rice Blast"
+    assert saved_data["top_confidence"] == 0.9421
+    assert saved_data["crop"] == "Rice"
+    assert saved_data["top_disease"] == "Rice Blast"
+    assert saved_data["top_disease_confidence"] == 0.9421
+    assert saved_data["top_pest"] == "Rice Stem Borer"
+    assert saved_data["top_pest_confidence"] == 0.785
+
+    all_det = saved_data["all_detections"]
+    assert len(all_det) == 3
+    assert all_det[0] == {"label": "Rice Blast", "confidence": 0.9421, "category": "disease", "source": "Roboflow"}
+    assert all_det[1] == {"label": "Rice Stem Borer", "confidence": 0.785, "category": "pest", "source": "Roboflow"}
+    assert all_det[2] == {"label": "Bacterial Leaf Blight", "confidence": 0.32, "category": "secondary", "source": "Roboflow"}
+
