@@ -532,3 +532,64 @@ CREATE POLICY "Farmers insert own feedback" ON public.farmer_feedback FOR INSERT
 DROP POLICY IF EXISTS "Farmers read own feedback" ON public.farmer_feedback;
 CREATE POLICY "Farmers read own feedback" ON public.farmer_feedback FOR SELECT USING (auth.uid() = user_id);
 
+-- -----------------------------------------------------------------------------
+-- 12. Advisory Activity & Notes Tables (Agronomic Telemetry & Admin Audit)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.advisory_activity (
+    query_id TEXT PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    crop TEXT,
+    state TEXT,
+    district TEXT,
+    query_summary TEXT,
+    activity_status TEXT NOT NULL DEFAULT 'success',
+    review_status TEXT NOT NULL DEFAULT 'not_reviewed',
+    documents_considered INTEGER DEFAULT 0,
+    documents_used INTEGER DEFAULT 0,
+    relevance_threshold_passed BOOLEAN DEFAULT TRUE,
+    no_verified_source BOOLEAN DEFAULT FALSE,
+    source_citations_json TEXT,
+    compliance_json TEXT,
+    error_category TEXT,
+    retention_expires_at TIMESTAMPTZ
+);
+
+CREATE INDEX IF NOT EXISTS idx_advisory_activity_created_at ON public.advisory_activity(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_advisory_activity_crop ON public.advisory_activity(crop);
+CREATE INDEX IF NOT EXISTS idx_advisory_activity_state ON public.advisory_activity(state);
+CREATE INDEX IF NOT EXISTS idx_advisory_activity_status ON public.advisory_activity(activity_status);
+CREATE INDEX IF NOT EXISTS idx_advisory_activity_review_status ON public.advisory_activity(review_status);
+
+ALTER TABLE public.advisory_activity ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admins read and write advisory activity" ON public.advisory_activity;
+CREATE POLICY "Admins read and write advisory activity" ON public.advisory_activity FOR ALL
+USING (
+  auth.role() = 'service_role' OR EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE profiles.id = auth.uid()
+    AND profiles.role IN ('admin', 'super_admin', 'auditor', 'agronomist', 'editor')
+  )
+);
+
+CREATE TABLE IF NOT EXISTS public.advisory_notes (
+    id BIGSERIAL PRIMARY KEY,
+    query_id TEXT NOT NULL REFERENCES public.advisory_activity(query_id) ON DELETE CASCADE,
+    admin_user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    note TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_advisory_notes_query_id ON public.advisory_notes(query_id);
+
+ALTER TABLE public.advisory_notes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admins read and write advisory notes" ON public.advisory_notes;
+CREATE POLICY "Admins read and write advisory notes" ON public.advisory_notes FOR ALL
+USING (
+  auth.role() = 'service_role' OR EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE profiles.id = auth.uid()
+    AND profiles.role IN ('admin', 'super_admin', 'auditor', 'agronomist', 'editor')
+  )
+);
+
+

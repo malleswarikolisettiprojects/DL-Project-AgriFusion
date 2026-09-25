@@ -612,7 +612,10 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 
 #### 5. Advisory Activity & Quality Page (`GET /api/v1/admin/advisories`)
 - **Auth**: Authenticated Admin (`require_admin`)
-- **Params**: `crop`, `state`, `district`, `status`, `review_status`, `start_date`, `end_date`, `page=1`, `page_size=25`
+- **Params**: `crop`, `state`, `district`, `status`, `review_status`, `start_date`, `end_date`, `search`, `page=1`, `page_size=25`
+- **Error Handling**: Database read failures return **HTTP 500 Internal Server Error** instead of returning HTTP 200 OK with `items: []`.
+- **Empty State**: Genuine empty table returns **HTTP 200 OK** with `items: []`, `total: 0`, and `privacy_note: "No advisory activity recorded yet."`.
+- **Activity Statuses**: `success`, `no_verified_source`, `timeout`, `failed`.
 - **Success Response (HTTP 200 OK)**:
   ```json
   {
@@ -623,7 +626,7 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
         "crop": "Paddy",
         "state": "Andhra Pradesh",
         "district": "Visakhapatnam",
-        "query_summary": "How to prevent paddy stem borer?",
+        "query_summary": "Paddy Pest Control Request",
         "activity_status": "success",
         "review_status": "not_reviewed",
         "retrieval": {
@@ -649,7 +652,7 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
     "page": 1,
     "page_size": 25,
     "total": 1,
-    "privacy_note": "Farmer advisory query context is presented in anonymized form."
+    "privacy_note": "Advisory activity is anonymized and shown for quality monitoring."
   }
   ```
 - **Mutations**:

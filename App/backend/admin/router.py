@@ -1044,6 +1044,7 @@ async def get_admin_advisories(
     source_verified: Optional[bool] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    search: Optional[str] = Query(None, description="Search term matching query summary, crop, state, district, or query_id"),
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """
@@ -1060,22 +1061,33 @@ async def get_admin_advisories(
             "state": state,
             "status": status,
             "review_status": review_status,
+            "search": search,
         },
     )
 
-    data = fetch_advisory_activities(
-        page=page,
-        page_size=page_size,
-        crop=crop,
-        state=state,
-        district=district,
-        status=status,
-        review_status=review_status,
-        source_verified=source_verified,
-        start_date=start_date,
-        end_date=end_date,
-    )
-    return data
+    try:
+        data = fetch_advisory_activities(
+            page=page,
+            page_size=page_size,
+            crop=crop,
+            state=state,
+            district=district,
+            status=status,
+            review_status=review_status,
+            source_verified=source_verified,
+            start_date=start_date,
+            end_date=end_date,
+            search=search,
+        )
+        return data
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to fetch admin advisory activity: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="The backend encountered an internal error.",
+        ) from exc
 
 
 @admin_router.patch("/advisories/{query_id}/review")

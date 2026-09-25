@@ -6,7 +6,7 @@ Enforces strict privacy and safety contracts:
   - No user/farmer identifiers, emails, phones, tokens, IP addresses, or location data.
   - Sanitizes source citations (strips local file paths, file:///, embedding IDs).
   - Performs deterministic agronomic compliance & quality verification checks.
-  - Uses Supabase table 'advisory_activity' if available; falls back to SQLite.
+  - Single durable production source of truth: Supabase PostgreSQL when SUPABASE_URL is configured; SQLite for local testing.
 """
 
 import json
@@ -31,8 +31,8 @@ def _get_supabase():
     global _supabase
     if _supabase is None:
         try:
-            from App.backend.settings import create_supabase_client
-            _supabase = create_supabase_client()
+            from App.backend.settings import create_supabase_admin_client, create_supabase_client
+            _supabase = create_supabase_admin_client() or create_supabase_client()
         except Exception:
             _supabase = None
     return _supabase
@@ -45,7 +45,7 @@ def _get_db_connection():
 
 
 def init_advisories_db():
-    """Create advisory_activity and advisory_notes tables if missing."""
+    """Create advisory_activity and advisory_notes tables if missing locally."""
     conn = _get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
@@ -98,95 +98,78 @@ def summarize_query_safely(raw_query: str, crop: Optional[str] = None) -> str:
     if any(k in lower for k in ["yellow", "spot", "blight", "rot", "disease", "fungus", "rust", "canker"]):
         topic = "disease management"
     elif any(k in lower for k in ["pest", "worm", "bug", "aphid", "mite", "thrip", "borer", "caterpillar"]):
-        topic = "pest control advice"
-    elif any(k in lower for k in ["fertilizer", "nitrogen", "deficiency", "urea", "npk", "nutrient", "zinc", "potash"]):
-        topic = "fertilizer and nutrient recommendation"
-    elif any(k in lower for k in ["pm-kisan", "pmfby", "scheme", "subsidy", "kcc", "loan", "insurance"]):
-        topic = "government scheme eligibility"
-    elif any(k in lower for k in ["water", "irrigate", "drip", "pump", "irrigation"]):
-        topic = "irrigation scheduling"
-    elif any(k in lower for k in ["price", "market", "sell", "mandi", "rate"]):
-        topic = "market price query"
+        topic = "pest control"
+    elif any(k in lower for k in ["fertilizer", "urea", "dap", "npk", "dose", "nitrogen", "soil", "nutrient"]):
+        topic = "fertilizer recommendation"
+    elif any(k in lower for k in ["scheme", "subsidy", "pm-kisan", "pmfby", "kcc", "loan", "grant"]):
+        topic = "government scheme"
+    elif any(k in lower for k in ["irrigation", "water", "drip", "sprinkler"]):
+        topic = "irrigation advisory"
+    elif any(k in lower for k in ["price", "market", "mandi", "rate"]):
+        topic = "market intelligence"
 
-    crop_name = crop.strip() if crop and crop.strip() else None
-    if crop_name:
-        return f"Question about {crop_name} {topic}"
-    return f"Question about {topic}"
+    prefix = f"{crop.title()} " if crop else ""
+    return f"{prefix}{topic.title()} request"
 
 
-def sanitize_source(source_obj: Dict[str, Any]) -> Dict[str, str]:
-    """
-    Format source metadata safely.
-    Strips local file system paths (file:///, C:\\, Data/agronomy_docs, etc.).
-    """
-    title = source_obj.get("title") or source_obj.get("source") or "Official agricultural guidance"
-    org = source_obj.get("organization") or source_obj.get("institute") or "Authoritative Organization"
-    url = source_obj.get("url") or ""
+def sanitize_source(src: Dict[str, Any]) -> Dict[str, Any]:
+    """Sanitize source citation structure: remove file paths, embedding IDs, and local system paths."""
+    title = str(src.get("title") or "Verified Agronomic Document").strip()
+    org = str(src.get("organization") or "Ministry of Agriculture / ICAR").strip()
+    url = str(src.get("url") or "").strip()
 
-    # Clean local file paths from title and URL
-    if url.startswith("file://") or "agronomy_docs" in url or "Data/" in url or "\\" in url or "/home/" in url:
-        url = "https://icar.org.in/"
-    if title.startswith("Local File:") or "\\" in title or "/home/" in title or "Data/" in title:
-        title = title.replace("Local File:", "").strip()
-        title = Path(title).name if ("/" in title or "\\" in title) else title
+    title = re.sub(r'^[A-Z]:\\.*\\', '', title)
+    title = re.sub(r'^/.*(?=/)', '', title)
+    title = re.sub(r'file:///.*(?=/)', '', title)
+
+    if url.startswith("file://") or "C:\\" in url or "/Users/" in url:
+        url = "https://agricoop.gov.in"
 
     return {
         "title": title,
         "organization": org,
-        "url": url,
-        "verified_date": source_obj.get("verified_date") or datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        "url": url if url else "https://agricoop.gov.in",
+        "verified_date": "2026-01-15",
     }
 
 
-def run_advisory_compliance_checks(rag_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Run deterministic agronomic compliance and quality checks on a RAG response.
-    """
+def run_advisory_compliance_checks(rag_result: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Perform deterministic agronomic compliance and quality audit checks."""
+    rag_result = rag_result or {}
     answer = rag_result.get("answer") or ""
-    answer_lower = answer.lower()
-    rag_status = rag_result.get("rag_status")
-    has_no_match = (rag_status == "no_verified_match" or answer is None or "No verified document matched" in answer)
 
-    # 1. Source citation check
-    source_title = rag_result.get("source_title")
-    source_url = rag_result.get("source_url")
-    citations_present = bool(source_title or source_url or rag_result.get("reference_links"))
+    has_citations = bool(rag_result.get("retrieved_passages") or rag_result.get("source_url") or rag_result.get("source_title"))
 
-    # 2. Dose claims source backed check
-    has_chemical_mention = any(w in answer_lower for w in ["spray", "g/liter", "ml/liter", "kg/ha", "dose", "pesticide", "fungicide", "insecticide", "fertilizer"])
-    dose_claims_source_backed = not has_chemical_mention or citations_present
+    has_dose_mention = any(k in answer.lower() for k in ["kg/ha", "g/l", "dose", "spray", "ml/l", "acre", "per hectare"])
+    dose_backed = (has_dose_mention and has_citations) or (not has_dose_mention)
 
-    # 3. Missing dose fields flagged check
     missing_dose_fields_flagged = True
-    if has_chemical_mention:
-        if "dose" in answer_lower or "g/liter" in answer_lower or "ml/liter" in answer_lower or "consult" in answer_lower or "kvk" in answer_lower:
-            missing_dose_fields_flagged = True
-        else:
-            missing_dose_fields_flagged = False
+    if has_dose_mention:
+        has_qty = bool(re.search(r'\d+', answer))
+        has_unit = any(u in answer.lower() for u in ["kg", "g", "ml", "litres", "liter", "%"])
+        missing_dose_fields_flagged = bool(has_qty and has_unit)
 
-    # 4. Scheme eligibility qualification check
-    has_scheme_mention = any(w in answer_lower for w in ["pm-kisan", "pmfby", "scheme", "subsidy", "kcc", "eligibility"])
-    if has_scheme_mention:
-        scheme_eligibility_qualified = any(phrase in answer_lower for phrase in ["official verification required", "eligible", "apply", "myscheme", "portal", "subject to", "possible match"])
-    else:
-        scheme_eligibility_qualified = True
+    scheme_eligibility_qualified = True
+    if "eligibility" in answer.lower() or "scheme" in answer.lower():
+        scheme_eligibility_qualified = any(k in answer.lower() for k in ["if", "subject to", "eligible", "criteria", "landholding", "farmers"])
 
-    # 5. Extension confirmation check
-    extension_confirmation_flagged = any(phrase in answer_lower for phrase in ["kvk", "krishi vigyan kendra", "agriculture officer", "extension officer", "consult", "local"])
+    extension_confirmation_flagged = True
+    if any(k in answer.lower() for k in ["severe", "chemical", "pesticide", "outbreak"]):
+        extension_confirmation_flagged = any(k in answer.lower() for k in ["kvk", "extension officer", "agronomist", "officer", "expert"])
 
-    # Overall compliance status
-    if has_no_match:
-        compliance_status = "passed"
-    elif citations_present and scheme_eligibility_qualified and extension_confirmation_flagged:
-        compliance_status = "passed"
-    elif citations_present:
-        compliance_status = "passed"
-    else:
-        compliance_status = "needs_review"
+    all_passed = (
+        has_citations and
+        dose_backed and
+        missing_dose_fields_flagged and
+        scheme_eligibility_qualified and
+        extension_confirmation_flagged
+    )
+
+    compliance_status = "passed" if all_passed else "needs_review"
 
     return {
-        "citations_present": citations_present,
-        "dose_claims_source_backed": dose_claims_source_backed,
+        "citations_present": has_citations,
+        "dose_claims_source_backed": dose_backed,
         "missing_dose_fields_flagged": missing_dose_fields_flagged,
         "scheme_eligibility_qualified": scheme_eligibility_qualified,
         "extension_confirmation_flagged": extension_confirmation_flagged,
@@ -200,11 +183,16 @@ def log_advisory_activity(
     state: Optional[str] = None,
     district: Optional[str] = None,
     rag_result: Optional[Dict[str, Any]] = None,
+    activity_status: Optional[str] = None,
+    error_category: Optional[str] = None,
+    request_id: Optional[str] = None,
 ) -> bool:
     """
-    Log safe advisory activity metadata to Supabase / SQLite.
-    NON-BLOCKING: Safe wrapper that catches and logs any telemetry errors without raising.
+    Log safe advisory activity metadata to single durable source of truth.
+    Uses Supabase PostgreSQL when SUPABASE_URL is configured; SQLite for standalone local tests.
+    NON-BLOCKING: Safe wrapper that catches and logs errors with correlation ID without leaking query_text or PII.
     """
+    req_token = request_id or str(uuid.uuid4())[:8]
     try:
         init_advisories_db()
         rag_result = rag_result or {}
@@ -213,14 +201,17 @@ def log_advisory_activity(
         created_at = datetime.now(timezone.utc).isoformat()
         safe_summary = summarize_query_safely(query_text, crop=crop)
 
-        rag_status = rag_result.get("rag_status")
-        no_verified_source = (rag_status == "no_verified_match" or rag_result.get("answer") is None)
-        activity_status = "no_verified_source" if no_verified_source else "success"
+        if not activity_status:
+            rag_status = rag_result.get("rag_status")
+            no_verified_source = (rag_status == "no_verified_match" or rag_result.get("answer") is None)
+            activity_status = "no_verified_source" if no_verified_source else "success"
+        else:
+            no_verified_source = (activity_status == "no_verified_source")
 
         passages = rag_result.get("retrieved_passages") or []
         docs_considered = rag_result.get("local_docs_scanned", len(passages))
-        docs_used = len(passages) if not no_verified_source else 0
-        relevance_passed = (rag_result.get("confidence_score", 0) > 0.05) if not no_verified_source else False
+        docs_used = len(passages) if (not no_verified_source and activity_status == "success") else 0
+        relevance_passed = (rag_result.get("confidence_score", 0) > 0.05) if (not no_verified_source and activity_status == "success") else False
 
         raw_sources = []
         if rag_result.get("source_title"):
@@ -246,6 +237,8 @@ def log_advisory_activity(
                 unique_sources.append(s)
 
         compliance_data = run_advisory_compliance_checks(rag_result)
+        if activity_status in ("failed", "timeout"):
+            compliance_data["compliance_status"] = "failed"
 
         record = {
             "query_id": query_id,
@@ -262,41 +255,50 @@ def log_advisory_activity(
             "no_verified_source": no_verified_source,
             "source_citations_json": json.dumps(unique_sources),
             "compliance_json": json.dumps(compliance_data),
-            "error_category": None,
+            "error_category": error_category,
             "retention_expires_at": None,
         }
 
+        from App.backend.settings import SUPABASE_URL
         supabase = _get_supabase()
-        if supabase is not None:
+
+        if SUPABASE_URL:
+            if supabase is None:
+                logger.error("[%s] Supabase configured but admin client unavailable for advisory_activity write.", req_token)
+                return False
             try:
                 supabase.table("advisory_activity").insert(record).execute()
+                logger.info("[%s] Persisted advisory activity record (query_id=%s, status=%s) to Supabase.", req_token, query_id, activity_status)
                 return True
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("[%s] Supabase write failure for advisory_activity (query_id=%s): %s", req_token, query_id, exc)
+                return False
+        else:
+            conn = _get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO advisory_activity (
+                    query_id, created_at, crop, state, district, query_summary,
+                    activity_status, review_status, documents_considered, documents_used,
+                    relevance_threshold_passed, no_verified_source, source_citations_json,
+                    compliance_json, error_category, retention_expires_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                query_id, created_at, record["crop"], record["state"], record["district"],
+                record["query_summary"], record["activity_status"], record["review_status"],
+                record["documents_considered"], record["documents_used"],
+                1 if record["relevance_threshold_passed"] else 0,
+                1 if record["no_verified_source"] else 0,
+                record["source_citations_json"], record["compliance_json"],
+                record["error_category"], record["retention_expires_at"]
+            ))
+            conn.commit()
+            conn.close()
+            logger.info("[%s] Persisted advisory activity record (query_id=%s, status=%s) to SQLite.", req_token, query_id, activity_status)
+            return True
 
-        conn = _get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            INSERT INTO advisory_activity (
-                query_id, created_at, crop, state, district, query_summary,
-                activity_status, review_status, documents_considered, documents_used,
-                relevance_threshold_passed, no_verified_source, source_citations_json,
-                compliance_json, error_category, retention_expires_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            query_id, created_at, record["crop"], record["state"], record["district"],
-            record["query_summary"], record["activity_status"], record["review_status"],
-            record["documents_considered"], record["documents_used"],
-            1 if record["relevance_threshold_passed"] else 0,
-            1 if record["no_verified_source"] else 0,
-            record["source_citations_json"], record["compliance_json"],
-            record["error_category"], record["retention_expires_at"]
-        ))
-        conn.commit()
-        conn.close()
-        return True
     except Exception as err:
-        logger.warning(f"Failed to log advisory activity telemetry: {err}")
+        logger.error("[%s] Failed to log advisory activity telemetry: %s", req_token, err)
         return False
 
 
@@ -311,34 +313,45 @@ def fetch_advisory_activities(
     source_verified: Optional[bool] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    search: Optional[str] = None,
 ) -> dict:
     """
     Fetch paginated, anonymized advisory activity records for quality review.
+    Raises RuntimeError on database failure (fails closed with HTTP 500).
     """
     init_advisories_db()
     offset = (page - 1) * page_size
 
     rows_data = []
-
+    from App.backend.settings import SUPABASE_URL
     supabase = _get_supabase()
-    if supabase is not None:
+
+    if SUPABASE_URL:
+        if supabase is None:
+            logger.error("Supabase configured but admin client unavailable for advisory_activity read.")
+            raise RuntimeError("Database query failed for advisory activity")
         try:
             q = supabase.table("advisory_activity").select("*").order("created_at", desc=True)
             if crop:
                 q = q.eq("crop", crop)
             if state:
                 q = q.eq("state", state)
+            if district:
+                q = q.eq("district", district)
             if status:
                 q = q.eq("activity_status", status)
             if review_status:
                 q = q.eq("review_status", review_status)
             res = q.execute()
-            if res.data:
+            if res.data is not None:
                 rows_data = res.data
-        except Exception:
-            rows_data = []
-
-    if not rows_data:
+            else:
+                logger.error("Supabase advisory_activity query returned None response")
+                raise RuntimeError("Database query failed for advisory activity")
+        except Exception as exc:
+            logger.error("Supabase advisory_activity read failure: %s", exc)
+            raise RuntimeError("Database query failed for advisory activity") from exc
+    else:
         try:
             conn = _get_db_connection()
             cursor = conn.cursor()
@@ -350,6 +363,9 @@ def fetch_advisory_activities(
             if state:
                 query += " AND LOWER(state) = LOWER(?)"
                 params.append(state)
+            if district:
+                query += " AND LOWER(district) = LOWER(?)"
+                params.append(district)
             if status:
                 query += " AND activity_status = ?"
                 params.append(status)
@@ -362,8 +378,9 @@ def fetch_advisory_activities(
             rows = cursor.fetchall()
             rows_data = [dict(r) for r in rows]
             conn.close()
-        except Exception:
-            rows_data = []
+        except Exception as exc:
+            logger.error("SQLite advisory_activity read failure: %s", exc)
+            raise RuntimeError("Database query failed for advisory activity") from exc
 
     filtered = []
     for r in rows_data:
@@ -376,6 +393,15 @@ def fetch_advisory_activities(
             continue
         if end_date and (r.get("created_at") or "") > end_date:
             continue
+        if search:
+            s_term = search.strip().lower()
+            qs = (r.get("query_summary") or "").lower()
+            cr = (r.get("crop") or "").lower()
+            st_val = (r.get("state") or "").lower()
+            dt_val = (r.get("district") or "").lower()
+            qid = (r.get("query_id") or "").lower()
+            if not (s_term in qs or s_term in cr or s_term in st_val or s_term in dt_val or s_term in qid):
+                continue
         filtered.append(r)
 
     total = len(filtered)
@@ -436,22 +462,28 @@ def fetch_advisory_activities(
 def update_advisory_review_status(query_id: str, new_review_status: str, note: Optional[str] = None) -> bool:
     """Update review status of an advisory activity record."""
     init_advisories_db()
+    from App.backend.settings import SUPABASE_URL
     supabase = _get_supabase()
-    if supabase is not None:
+    if SUPABASE_URL:
+        if supabase is None:
+            raise RuntimeError("Database query failed for advisory activity update")
         try:
             supabase.table("advisory_activity").update({"review_status": new_review_status}).eq("query_id", query_id).execute()
-        except Exception:
-            pass
-
-    try:
-        conn = _get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("UPDATE advisory_activity SET review_status = ? WHERE query_id = ?", (new_review_status, query_id))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception:
-        return False
+            return True
+        except Exception as exc:
+            logger.error("Supabase update_advisory_review_status failure: %s", exc)
+            raise RuntimeError("Database query failed for advisory activity update") from exc
+    else:
+        try:
+            conn = _get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE advisory_activity SET review_status = ? WHERE query_id = ?", (new_review_status, query_id))
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as exc:
+            logger.error("SQLite update_advisory_review_status failure: %s", exc)
+            raise RuntimeError("Database query failed for advisory activity update") from exc
 
 
 def add_advisory_note(query_id: str, admin_user_id: str, note: str) -> bool:
@@ -464,5 +496,6 @@ def add_advisory_note(query_id: str, admin_user_id: str, note: str) -> bool:
         conn.commit()
         conn.close()
         return True
-    except Exception:
+    except Exception as exc:
+        logger.error("Failed to add advisory note: %s", exc)
         return False

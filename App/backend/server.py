@@ -670,6 +670,7 @@ async def api_agent_query(req: AgentQueryRequest):
                 state=req.state,
                 district=req.district,
                 rag_result=res,
+                request_id=req_id,
             )
         except Exception as log_err:
             logger.warning("[%s] Advisory telemetry logging failed non-blockingly: %s", req_id, log_err)
@@ -679,14 +680,50 @@ async def api_agent_query(req: AgentQueryRequest):
         return {"success": True, "stage": "agent", "agent_response": res}
     except ValueError as ve:
         logger.warning("[%s] Agent query input validation warning: %s", req_id, ve)
+        try:
+            log_advisory_activity(
+                query_text=req.query,
+                crop=req.crop,
+                state=req.state,
+                district=req.district,
+                activity_status="failed",
+                error_category="INVALID_INPUT",
+                request_id=req_id,
+            )
+        except Exception:
+            pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=422, error_code="INVALID_INPUT", request_id=req_id)
         return make_error_response(422, "agent", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
         logger.error("[%s] Agent query TIMEOUT (>45s)", req_id)
+        try:
+            log_advisory_activity(
+                query_text=req.query,
+                crop=req.crop,
+                state=req.state,
+                district=req.district,
+                activity_status="timeout",
+                error_category="RAG_SERVICE_TIMEOUT",
+                request_id=req_id,
+            )
+        except Exception:
+            pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_TIMEOUT", request_id=req_id)
         return make_error_response(504, "agent", "RAG_SERVICE_TIMEOUT", "Agronomy AI agent request timed out.", retryable=True)
     except Exception as err:
         logger.exception("[%s] Agent query failed: %s", req_id, err)
+        try:
+            log_advisory_activity(
+                query_text=req.query,
+                crop=req.crop,
+                state=req.state,
+                district=req.district,
+                activity_status="failed",
+                error_category="RAG_SERVICE_FAILED",
+                request_id=req_id,
+            )
+        except Exception:
+            pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_FAILED", request_id=req_id)
         return make_error_response(504, "agent", "RAG_SERVICE_FAILED", f"Agronomy AI agent service failed: {str(err)}", retryable=True)
 
