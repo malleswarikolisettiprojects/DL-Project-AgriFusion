@@ -71,6 +71,7 @@ class TestAuth:
                 os.environ["ADMIN_PASSWORD"] = orig_p
 
     def test_verify_admin_succeeds_with_env(self):
+        """Deprecated: verify_admin must always return False to enforce Supabase Auth flow."""
         os.environ["ADMIN_USERNAME"] = "test_admin_xyz"
         os.environ["ADMIN_PASSWORD"] = "test_pass_xyz_secure!"
         try:
@@ -78,9 +79,7 @@ class TestAuth:
             importlib.reload(_s)
             import App.backend.database.auth_db as _a
             importlib.reload(_a)
-            assert _a.verify_admin("test_admin_xyz", "test_pass_xyz_secure!") is True
-            assert _a.verify_admin("test_admin_xyz", "wrong_password") is False
-            assert _a.verify_admin("wrong_user", "test_pass_xyz_secure!") is False
+            assert _a.verify_admin("test_admin_xyz", "test_pass_xyz_secure!") is False
         finally:
             os.environ.pop("ADMIN_USERNAME", None)
             os.environ.pop("ADMIN_PASSWORD", None)
