@@ -33,7 +33,10 @@ async def login(payload: LoginRequest):
     from App.backend.database.auth_db import verify_admin
     if verify_admin(email_raw, payload.password) or verify_admin(email_clean, payload.password):
         import time, jwt, os
-        secret = os.getenv("SUPABASE_JWT_SECRET") or os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY") or "agrifusion_admin_secret_key"
+        secret = os.getenv("SUPABASE_JWT_SECRET") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+        if not secret:
+            logger.error("SUPABASE_JWT_SECRET or SUPABASE_SERVICE_ROLE_KEY is required for admin JWT signing.")
+            raise HTTPException(status_code=500, detail="Server authentication configuration error.")
         now = int(time.time())
         claims = {
             "sub": "00000000-0000-0000-0000-000000000001",

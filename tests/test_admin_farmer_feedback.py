@@ -143,3 +143,10 @@ def test_api_submit_feedback_endpoint():
         assert res_json["success"] is True
         assert "feedback_id" in res_json
         assert len(res_json["feedback_id"]) == 36
+
+
+def test_admin_feedback_anonymous_access_denied():
+    """Test that unauthenticated requests to /api/v1/admin/feedback are rejected."""
+    response = client.get("/api/v1/admin/feedback")
+    assert response.status_code in (401, 403)
+

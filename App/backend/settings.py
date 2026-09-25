@@ -80,9 +80,9 @@ SUPABASE_KEY: Optional[str] = (
 ROBOFLOW_API_KEY: Optional[str] = _get_env("ROBOFLOW_API_KEY")
 HF_TOKEN: Optional[str] = _get_env("HF_TOKEN")
 
-# Admin authentication — defaults to standard admin credentials if env vars absent
-ADMIN_USERNAME: Optional[str] = _get_env("ADMIN_USERNAME") or "Admin@1"
-ADMIN_PASSWORD: Optional[str] = _get_env("ADMIN_PASSWORD") or "Admin@123"
+# Admin authentication — enabled only when explicit environment variables are set
+ADMIN_USERNAME: Optional[str] = _get_env("ADMIN_USERNAME")
+ADMIN_PASSWORD: Optional[str] = _get_env("ADMIN_PASSWORD")
 
 # Service URLs
 BACKEND_URL: str = _get_env("BACKEND_URL") or "http://localhost:8000"
