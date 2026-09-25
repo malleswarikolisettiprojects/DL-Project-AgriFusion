@@ -48,6 +48,7 @@ from App.backend.database.schemes_db import init_schemes_db
 from App.backend.database.system_events import record_system_event
 from App.backend.database.database import supabase
 from App.backend.database.save_predictions import (
+    log_ml_prediction_event,
     save_climate_prediction,
     save_crop_prediction,
     save_disease_prediction,
@@ -315,34 +316,84 @@ async def api_predict_crop(
     t0 = time.time()
     logger.info("[%s] POST /api/v1/predict/crop started - state=%s district=%s", req_id, req.state, req.district)
     user_id = current_user.id if current_user else None
+    user_email = current_user.email if current_user else None
     try:
-        user_email = current_user.email if current_user else None
         payload = {"state": req.state, "district": req.district, "village": req.village, "start_date": req.sowing_date}
         result = await asyncio.wait_for(
             run_in_threadpool(predict_crop, payload),
             timeout=35.0,
         )
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        crop_val = result.get("recommended_crop") or result.get("predicted_crop")
         try:
-            save_crop_prediction({**result, "user_email": user_email})
+            save_res = save_crop_prediction({
+                **result,
+                "user_id": user_id,
+                "user_email": user_email,
+                "state": req.state,
+                "district": req.district,
+                "village": req.village,
+                "season": req.sowing_date,
+                "predicted_crop": crop_val,
+                "confidence": result.get("confidence"),
+                "request_summary": {"village": req.village, "sowing_date": req.sowing_date},
+                "result_summary": {"predicted_crop": crop_val, "confidence": result.get("confidence")},
+                "status": "success",
+                "latency_ms": duration_ms,
+            })
+            if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
+                logger.warning("[%s] Supabase crop telemetry save failed: %s", req_id, save_res.get("error"))
         except Exception as db_err:
             logger.warning("[%s] Supabase crop log non-blocking warning: %s", req_id, db_err)
+
         record_system_event("prediction_request", module="crop", status="success", user_id=user_id, request_id=req_id)
-        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.info("[%s] Crop prediction success in %sms", req_id, duration_ms)
         return {"success": True, "stage": "crop", "result": result}
     except ValueError as ve:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.warning("[%s] Crop input validation warning: %s", req_id, ve)
+        log_ml_prediction_event({
+            "model_type": "crop_recommendation",
+            "state": req.state,
+            "district": req.district,
+            "request_summary": {"state": req.state, "district": req.district},
+            "status": "failed",
+            "error_code": "INVALID_INPUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         record_system_event("prediction_request", module="crop", status="failed", http_status=422, error_code="INVALID_INPUT", user_id=user_id, request_id=req_id)
         return make_error_response(422, "crop", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.error("[%s] Crop prediction TIMEOUT (>35s)", req_id)
+        log_ml_prediction_event({
+            "model_type": "crop_recommendation",
+            "state": req.state,
+            "district": req.district,
+            "request_summary": {"state": req.state, "district": req.district},
+            "status": "failed",
+            "error_code": "CROP_SERVICE_TIMEOUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         record_system_event("prediction_request", module="crop", status="failed", http_status=504, error_code="CROP_SERVICE_TIMEOUT", user_id=user_id, request_id=req_id)
         return make_error_response(504, "crop", "CROP_SERVICE_TIMEOUT", "Crop recommendation request timed out.", retryable=True)
     except Exception as err:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.exception("[%s] Crop prediction failed: %s", req_id, err)
+        log_ml_prediction_event({
+            "model_type": "crop_recommendation",
+            "state": req.state,
+            "district": req.district,
+            "request_summary": {"state": req.state, "district": req.district},
+            "status": "failed",
+            "error_code": "MODEL_INFERENCE_FAILED",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         record_system_event("prediction_request", module="crop", status="failed", http_status=502, error_code="MODEL_INFERENCE_FAILED", user_id=user_id, request_id=req_id)
         return make_error_response(502, "crop", "MODEL_INFERENCE_FAILED", f"Crop recommendation failed: {str(err)}", retryable=True)
-
 
 
 # 2. Climate Risk API
@@ -354,6 +405,8 @@ async def api_predict_climate(
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     logger.info("[%s] POST /api/v1/predict/climate started - state=%s crop=%s", req_id, req.state, req.crop)
+    user_id = current_user.id if current_user else None
+    user_email = current_user.email if current_user else None
     try:
         payload = {
             "state": req.state,
@@ -368,16 +421,67 @@ async def api_predict_climate(
         result.pop("daily_data", None)
         result.pop("hourly_data", None)
         duration_ms = round((time.time() - t0) * 1000, 2)
+        try:
+            save_res = save_climate_prediction({
+                **result,
+                "user_id": user_id,
+                "user_email": user_email,
+                "state": req.state,
+                "district": req.district,
+                "crop": req.crop,
+                "request_summary": {"sowing_date": req.sowing_date},
+                "result_summary": {"predicted_climate_risk": result.get("predicted_climate_risk")},
+                "status": "success",
+                "latency_ms": duration_ms,
+            })
+            if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
+                logger.warning("[%s] Supabase climate telemetry save failed: %s", req_id, save_res.get("error"))
+        except Exception as db_err:
+            logger.warning("[%s] Supabase climate log non-blocking warning: %s", req_id, db_err)
+
         logger.info("[%s] Climate risk prediction success in %sms", req_id, duration_ms)
         return {"success": True, "stage": "climate", "result": result}
     except ValueError as ve:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.warning("[%s] Climate risk input validation warning: %s", req_id, ve)
+        log_ml_prediction_event({
+            "model_type": "climate_risk",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "INVALID_INPUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(422, "climate", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.error("[%s] Climate risk prediction TIMEOUT (>35s)", req_id)
+        log_ml_prediction_event({
+            "model_type": "climate_risk",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "CLIMATE_SERVICE_TIMEOUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(504, "climate", "CLIMATE_SERVICE_TIMEOUT", "Climate risk prediction request timed out.", retryable=True)
     except Exception as err:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.exception("[%s] Climate risk prediction failed: %s", req_id, err)
+        log_ml_prediction_event({
+            "model_type": "climate_risk",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "CLIMATE_RISK_FAILED",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(502, "climate", "CLIMATE_RISK_FAILED", f"Climate risk prediction failed: {str(err)}", retryable=True)
 
 
@@ -390,8 +494,9 @@ async def api_predict_irrigation(
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     logger.info("[%s] POST /api/v1/predict/irrigation started - state=%s crop=%s area=%s", req_id, req.state, req.crop, req.area_ha)
+    user_id = current_user.id if current_user else None
+    user_email = current_user.email if current_user else None
     try:
-        user_email = current_user.email if current_user else None
         payload = {
             "state": req.state,
             "district": req.district,
@@ -404,21 +509,68 @@ async def api_predict_irrigation(
             run_in_threadpool(predict_irrigation, payload),
             timeout=35.0,
         )
+        duration_ms = round((time.time() - t0) * 1000, 2)
         try:
-            save_irrigation_prediction({**result, "user_email": user_email})
+            save_res = save_irrigation_prediction({
+                **result,
+                "user_id": user_id,
+                "user_email": user_email,
+                "state": req.state,
+                "district": req.district,
+                "crop": req.crop,
+                "predicted_irrigation": result.get("predicted_irrigation") or result.get("water_requirement_mm"),
+                "request_summary": {"area_ha": req.area_ha, "start_date": req.start_date, "pump_hp": req.pump_hp},
+                "result_summary": {"predicted_irrigation": result.get("predicted_irrigation"), "water_requirement_mm": result.get("water_requirement_mm")},
+                "status": "success",
+                "latency_ms": duration_ms,
+            })
+            if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
+                logger.warning("[%s] Supabase irrigation telemetry save failed: %s", req_id, save_res.get("error"))
         except Exception as db_err:
             logger.warning("[%s] Supabase irrigation log non-blocking warning: %s", req_id, db_err)
-        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.info("[%s] Irrigation calculation success in %sms", req_id, duration_ms)
         return {"success": True, "stage": "irrigation", "result": result}
     except ValueError as ve:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.warning("[%s] Irrigation input validation warning: %s", req_id, ve)
+        log_ml_prediction_event({
+            "model_type": "irrigation_scheduling",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "INVALID_INPUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(422, "irrigation", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.error("[%s] Irrigation calculation TIMEOUT (>35s)", req_id)
+        log_ml_prediction_event({
+            "model_type": "irrigation_scheduling",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "IRRIGATION_SERVICE_TIMEOUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(504, "irrigation", "IRRIGATION_SERVICE_TIMEOUT", "Irrigation calculation timed out.", retryable=True)
     except Exception as err:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.exception("[%s] Irrigation calculation failed: %s", req_id, err)
+        log_ml_prediction_event({
+            "model_type": "irrigation_scheduling",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "IRRIGATION_CALCULATION_FAILED",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(502, "irrigation", "IRRIGATION_CALCULATION_FAILED", f"Irrigation calculation failed: {str(err)}", retryable=True)
 
 
@@ -431,8 +583,9 @@ async def api_predict_yield(
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     logger.info("[%s] POST /api/v1/predict/yield started - crop=%s area=%s season=%s", req_id, req.crop, req.area_ha, req.season)
+    user_id = current_user.id if current_user else None
+    user_email = current_user.email if current_user else None
     try:
-        user_email = current_user.email if current_user else None
         payload = {
             "state": req.state,
             "district": req.district,
@@ -445,21 +598,71 @@ async def api_predict_yield(
             run_in_threadpool(predict_yield, payload),
             timeout=35.0,
         )
+        duration_ms = round((time.time() - t0) * 1000, 2)
         try:
-            save_yield_prediction({**result, "user_email": user_email})
+            save_res = save_yield_prediction({
+                **result,
+                "user_id": user_id,
+                "user_email": user_email,
+                "state": req.state,
+                "district": req.district,
+                "crop": req.crop,
+                "season": req.season,
+                "year": req.year,
+                "area": req.area_ha,
+                "predicted_yield": result.get("predicted_yield") or result.get("yield_t_per_ha"),
+                "request_summary": {"season": req.season, "area_ha": req.area_ha, "year": req.year},
+                "result_summary": {"predicted_yield": result.get("predicted_yield"), "total_production_tonnes": result.get("total_production_tonnes")},
+                "status": "success",
+                "latency_ms": duration_ms,
+            })
+            if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
+                logger.warning("[%s] Supabase yield telemetry save failed: %s", req_id, save_res.get("error"))
         except Exception as db_err:
             logger.warning("[%s] Supabase yield log non-blocking warning: %s", req_id, db_err)
-        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.info("[%s] Yield estimation success in %sms", req_id, duration_ms)
         return {"success": True, "stage": "yield", "result": result}
     except ValueError as ve:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.warning("[%s] Yield input validation warning: %s", req_id, ve)
+        log_ml_prediction_event({
+            "model_type": "yield_prediction",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "INVALID_INPUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(422, "yield", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.error("[%s] Yield prediction TIMEOUT (>35s)", req_id)
+        log_ml_prediction_event({
+            "model_type": "yield_prediction",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "YIELD_SERVICE_TIMEOUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(504, "yield", "YIELD_SERVICE_TIMEOUT", "Yield estimation timed out.", retryable=True)
     except Exception as err:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.exception("[%s] Yield prediction failed: %s", req_id, err)
+        log_ml_prediction_event({
+            "model_type": "yield_prediction",
+            "crop": req.crop,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "YIELD_PREDICTION_FAILED",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(502, "yield", "YIELD_PREDICTION_FAILED", f"Yield estimation failed: {str(err)}", retryable=True)
 
 
@@ -472,6 +675,8 @@ async def api_predict_market(
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     logger.info("[%s] POST /api/v1/predict/market started - commodity=%s state=%s district=%s date=%s", req_id, req.commodity, req.state, req.district, req.market_date)
+    user_id = current_user.id if current_user else None
+    user_email = current_user.email if current_user else None
 
     cache_key = make_market_cache_key(
         state=req.state,
@@ -492,8 +697,6 @@ async def api_predict_market(
 
     # 2. Acquire lock and execute prediction non-blocking
     try:
-        user_email = current_user.email if current_user else None
-
         async with get_cache_lock():
             # Re-check cache after acquiring lock
             cached_result, is_stale = get_cached_market_price(cache_key)
@@ -517,6 +720,8 @@ async def api_predict_market(
                 timeout=28.0,
             )
 
+            duration_ms = round((time.time() - t0) * 1000, 2)
+
             if not result or "predicted_price" not in result:
                 if cached_result:
                     logger.warning("[%s] Fresh market lookup returned empty result, using stale cache fallback", req_id)
@@ -527,6 +732,16 @@ async def api_predict_market(
                         "stale": True,
                         "message": "Mandi price data served from cache (upstream market source temporarily unavailable)."
                     }
+                log_ml_prediction_event({
+                    "model_type": "market_price_forecasting",
+                    "crop": req.commodity,
+                    "state": req.state,
+                    "district": req.district,
+                    "status": "failed",
+                    "error_code": "MARKET_DATA_UNAVAILABLE",
+                    "latency_ms": duration_ms,
+                    "user_id": user_id,
+                })
                 return make_error_response(
                     status_code=502,
                     stage="market",
@@ -537,19 +752,54 @@ async def api_predict_market(
 
             set_cached_market_price(cache_key, result)
             try:
-                save_market_prediction({**result, "user_email": user_email})
+                save_res = save_market_prediction({
+                    **result,
+                    "user_id": user_id,
+                    "user_email": user_email,
+                    "commodity": req.commodity,
+                    "state": req.state,
+                    "district": req.district,
+                    "predicted_market_price": result.get("predicted_price") or result.get("predicted_market_price"),
+                    "request_summary": {"area_ha": req.area_ha, "season": req.season, "market_date": req.market_date},
+                    "result_summary": {"predicted_price": result.get("predicted_price"), "unit": result.get("unit")},
+                    "status": "success",
+                    "latency_ms": duration_ms,
+                })
+                if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
+                    logger.warning("[%s] Supabase market telemetry save failed: %s", req_id, save_res.get("error"))
             except Exception as db_err:
                 logger.warning("[%s] Supabase market log non-blocking warning: %s", req_id, db_err)
 
-            duration_ms = round((time.time() - t0) * 1000, 2)
             logger.info("[%s] Market price prediction success in %sms", req_id, duration_ms)
             return {"success": True, "stage": "market", "result": result}
 
     except ValueError as ve:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.warning("[%s] Market request input validation warning: %s", req_id, ve)
+        log_ml_prediction_event({
+            "model_type": "market_price_forecasting",
+            "crop": req.commodity,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "INVALID_INPUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(422, "market", "INVALID_INPUT", str(ve), retryable=False)
     except asyncio.TimeoutError:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.error("[%s] Market price prediction TIMEOUT (>20s)", req_id)
+        log_ml_prediction_event({
+            "model_type": "market_price_forecasting",
+            "crop": req.commodity,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "MARKET_DATA_UNAVAILABLE",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         if cached_result:
             logger.warning("[%s] Returning stale cached result after timeout", req_id)
             return {
@@ -567,7 +817,18 @@ async def api_predict_market(
             retryable=True,
         )
     except Exception as err:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.exception("[%s] Market price prediction failed: %s", req_id, err)
+        log_ml_prediction_event({
+            "model_type": "market_price_forecasting",
+            "crop": req.commodity,
+            "state": req.state,
+            "district": req.district,
+            "status": "failed",
+            "error_code": "MARKET_DATA_UNAVAILABLE",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         if cached_result:
             logger.warning("[%s] Returning stale cached result after exception", req_id)
             return {
@@ -596,9 +857,9 @@ async def api_predict_disease(
     req_id = str(uuid.uuid4())[:8]
     t0 = time.time()
     logger.info("[%s] POST /api/v1/predict/disease started - crop=%s filename=%s", req_id, crop, image.filename)
+    user_id = current_user.id if current_user else None
+    user_email = current_user.email if current_user else None
     try:
-        user_email = current_user.email if current_user else None
-        user_id = current_user.id if current_user else None
         raw = await image.read()
         content_type = (image.content_type or "image/jpeg").lower()
         result = await asyncio.wait_for(
@@ -608,6 +869,7 @@ async def api_predict_disease(
             ),
             timeout=60.0,
         )
+        duration_ms = round((time.time() - t0) * 1000, 2)
         top_detections = result.get("top_detections", [])
         secondary = result.get("secondary_detections", [])
         top_disease = next((d for d in top_detections if "disease" in d.get("source", "").lower()), {})
@@ -631,23 +893,57 @@ async def api_predict_disease(
                 "annotated_image_url":     result.get("annotated_image_url"),
                 "all_detections":          all_detections,
                 "custom_crop_notice":      result.get("custom_crop_notice"),
+                "request_summary":         {"filename": image.filename, "content_type": content_type},
+                "result_summary":         {"all_detections_count": len(all_detections), "top_disease": top_disease.get("label")},
+                "status":                 "success",
+                "latency_ms":              duration_ms,
             })
             if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
                 logger.warning("[%s] Supabase disease telemetry save failed: %s", req_id, save_res.get("error") or "telemetry_saved is False")
         except Exception as db_err:
             logger.warning("[%s] Supabase disease log non-blocking warning: %s", req_id, db_err)
-        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.info("[%s] Disease inference success in %sms", req_id, duration_ms)
         return {"success": True, "stage": "disease", "result": result}
     except ValueError as val_err:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.warning("[%s] Disease upload validation warning: %s", req_id, val_err)
+        log_ml_prediction_event({
+            "model_type": "disease_detection",
+            "crop": crop,
+            "request_summary": {"filename": getattr(image, "filename", None)},
+            "status": "failed",
+            "error_code": "INVALID_FILE_UPLOAD",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(400, "disease", "INVALID_FILE_UPLOAD", str(val_err), retryable=False)
     except asyncio.TimeoutError:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.error("[%s] Disease inference TIMEOUT (>30s)", req_id)
+        log_ml_prediction_event({
+            "model_type": "disease_detection",
+            "crop": crop,
+            "request_summary": {"filename": getattr(image, "filename", None)},
+            "status": "failed",
+            "error_code": "DISEASE_SERVICE_TIMEOUT",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(504, "disease", "DISEASE_SERVICE_TIMEOUT", "Disease diagnosis request timed out.", retryable=True)
     except Exception as err:
+        duration_ms = round((time.time() - t0) * 1000, 2)
         logger.exception("[%s] Disease inference failed: %s", req_id, err)
+        log_ml_prediction_event({
+            "model_type": "disease_detection",
+            "crop": crop,
+            "request_summary": {"filename": getattr(image, "filename", None)},
+            "status": "failed",
+            "error_code": "DISEASE_INFERENCE_FAILED",
+            "latency_ms": duration_ms,
+            "user_id": user_id,
+        })
         return make_error_response(502, "disease", "DISEASE_INFERENCE_FAILED", f"Disease inference failed: {str(err)}", retryable=True)
+
 
 
 # 6b. Universal Agriculture & Scheme Agent Query API

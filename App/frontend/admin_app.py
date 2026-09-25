@@ -91,6 +91,7 @@ with st.sidebar:
             "📊 Dashboard Overview",
             "👤 User Directory",
             "🚜 Regional Farm Profiles",
+            "🤖 ML Predictions Activity",
             "🩺 Advisory Quality & Audit",
             "🔬 Crop Diagnostics Audit",
             "🛡️ Security Audit Logs",
@@ -230,6 +231,78 @@ elif menu == "🚜 Regional Farm Profiles":
             st.error(f"Failed to load farm profiles: {f_res.text}")
     except Exception as err:
         st.error(f"Error fetching farm profiles: {err}")
+
+# =============================================================================
+# MODULE 3b: ML PREDICTIONS ACTIVITY LOG
+# =============================================================================
+elif menu == "🤖 ML Predictions Activity":
+    st.header("🤖 ML Model Predictions Telemetry & Activity Log")
+
+    p_col1, p_col2, p_col3, p_col4 = st.columns(4)
+    with p_col1:
+        pred_model_f = st.selectbox("Model Type", ["All", "crop_recommendation", "irrigation_scheduling", "yield_prediction", "market_price_forecasting", "disease_detection"])
+    with p_col2:
+        pred_state_f = st.selectbox("State Filter", ["All", "Andhra Pradesh", "Telangana", "Karnataka", "Punjab", "Maharashtra", "Tamil Nadu"])
+    with p_col3:
+        pred_status_f = st.selectbox("Status Filter", ["All", "success", "failed"])
+    with p_col4:
+        pred_search_f = st.text_input("Search Inferences", value="", placeholder="Crop, state, district, model...")
+
+    params = {"page": 1, "page_size": 50}
+    if pred_model_f != "All":
+        params["model_type"] = pred_model_f
+    if pred_state_f != "All":
+        params["state"] = pred_state_f
+    if pred_status_f != "All":
+        params["status"] = pred_status_f
+    if pred_search_f.strip():
+        params["search"] = pred_search_f.strip()
+
+    try:
+        p_res = requests.get(f"{API_BASE_URL}/api/v1/admin/predictions", headers=get_headers(), params=params, timeout=10)
+        if p_res.status_code == 200:
+            p_data = p_res.json()
+            items = p_data.get("items", [])
+            analytics = p_data.get("analytics", {})
+
+            # Summary Metrics Row
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Inferences", analytics.get("total_predictions", len(items)))
+            m2.metric("Successful", analytics.get("success_count", 0))
+            m3.metric("Failed", analytics.get("error_count", 0))
+            avg_lat = analytics.get("average_latency_ms")
+            m4.metric("Avg Latency (ms)", f"{avg_lat} ms" if avg_lat is not None else "Uncollected")
+
+            st.markdown("---")
+            st.subheader(f"Logged Inference Events: {p_data.get('total', len(items))}")
+
+            if items:
+                for ev in items:
+                    st_badge = "🟢 Success" if ev.get("status") == "success" else f"🔴 Failed ({ev.get('error_code') or 'Error'})"
+                    lat_str = f"{ev.get('latency_ms')} ms" if ev.get("latency_ms") is not None else "Uncollected"
+                    with st.expander(f"🤖 [{ev.get('model_type')}] Crop: `{ev.get('crop') or 'Unspecified'}` — Status: {st_badge} | Latency: `{lat_str}`"):
+                        st.write(f"**Event ID:** `{ev.get('id')}` | **Date:** `{ev.get('created_at')}`")
+                        st.write(f"**State:** `{ev.get('state') or 'N/A'}` | **District:** `{ev.get('district') or 'N/A'}` | **User ID:** `{ev.get('user_id') or 'Anonymous'}`")
+                        
+                        col_req, col_res = st.columns(2)
+                        with col_req:
+                            st.write("**Request Summary:**")
+                            st.json(ev.get("request_summary") or {})
+                        with col_res:
+                            st.write("**Result Summary:**")
+                            st.json(ev.get("result_summary") or {})
+            else:
+                st.info("No ML prediction telemetry events match the selected filters.")
+        elif p_res.status_code == 401:
+            st.error("🔒 Authentication Error (401): Session expired or invalid admin token.")
+        elif p_res.status_code == 403:
+            st.error("🚫 Access Forbidden (403): You do not have admin rights for ML activity telemetry.")
+        elif p_res.status_code == 500:
+            st.error("💥 Server Error (HTTP 500): Database query failed for ML prediction activity log.")
+        else:
+            st.error(f"Failed to fetch ML predictions activity log (HTTP {p_res.status_code}): {p_res.text}")
+    except Exception as err:
+        st.error(f"Error fetching ML predictions activity log: {err}")
 
 # =============================================================================
 # MODULE 4: ADVISORY QUALITY & AUDIT

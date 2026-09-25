@@ -47,6 +47,7 @@ from App.backend.database.schemes_db import (
     update_government_scheme_record,
     verify_government_scheme,
 )
+from App.backend.database.farmer_db import get_ml_predictions_for_admin
 from App.backend.database.auth_db import (
     count_active_admins_in_db,
     fetch_all_supabase_predictions,
@@ -2041,114 +2042,40 @@ async def get_admin_predictions(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     prediction_type: Optional[str] = Query(None),
+    model_type: Optional[str] = Query(None),
     state: Optional[str] = Query(None),
     district: Optional[str] = Query(None),
     crop: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """
-    Retrieve system predictions table records and aggregated analytics (usage, success/error rates,
-    average latency, and daily volume trends) for administrative review.
+    Retrieve system predictions table records and aggregated analytics from public.ml_prediction_events.
     """
-    all_preds = fetch_all_supabase_predictions()
-    
-    flat_records = []
-    type_counts = {
-        "crop_recommendation": 0,
-        "climate_risk": 0,
-        "irrigation_schedule": 0,
-        "yield_forecast": 0,
-        "market_price": 0,
-        "disease_detection": 0,
-        "pipeline": 0,
-    }
+    try:
+        return get_ml_predictions_for_admin(
+            page=page,
+            page_size=page_size,
+            model_type=model_type or prediction_type,
+            prediction_type=prediction_type,
+            state=state,
+            district=district,
+            crop=crop,
+            status=status,
+            start_date=start_date,
+            end_date=end_date,
+            search=search,
+        )
+    except RuntimeError as rerr:
+        logger.error("Database error in get_admin_predictions: %s", rerr)
+        raise HTTPException(status_code=500, detail=str(rerr))
+    except Exception as exc:
+        logger.error("Unhandled error in get_admin_predictions: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to fetch prediction activity log.")
 
-    type_mapping = {
-        "Crop Predictions": "crop_recommendation",
-        "Climate Risk Predictions": "climate_risk",
-        "Irrigation Predictions": "irrigation_schedule",
-        "Yield Predictions": "yield_forecast",
-        "Market Price Predictions": "market_price",
-        "Disease & Pest Detections": "disease_detection",
-        "Unified Connected Predictions": "pipeline",
-    }
-
-    for section_key, recs in all_preds.items():
-        if section_key == "Registered Users":
-            continue
-        p_type = type_mapping.get(section_key, section_key.lower().replace(" ", "_"))
-        if isinstance(recs, list):
-            for r in recs:
-                if isinstance(r, dict):
-                    item = dict(r)
-                    item["prediction_type"] = item.get("prediction_type") or p_type
-                    flat_records.append(item)
-
-    # Filter flat_records
-    filtered = []
-    for r in flat_records:
-        r_type = (r.get("prediction_type") or "").lower()
-        if prediction_type and prediction_type.lower() not in r_type:
-            continue
-        
-        req = r.get("request_payload") if isinstance(r.get("request_payload"), dict) else r
-        r_state = (r.get("state") or req.get("state") or "").lower()
-        r_dist = (r.get("district") or req.get("district") or "").lower()
-        r_crop = (r.get("crop") or req.get("crop") or "").lower()
-        r_status = (r.get("status") or "completed").lower()
-        r_date = r.get("created_at") or ""
-
-        if state and state.strip().lower() not in r_state:
-            continue
-        if district and district.strip().lower() not in r_dist:
-            continue
-        if crop and crop.strip().lower() not in r_crop:
-            continue
-        if status and status.strip().lower() != r_status:
-            continue
-        if start_date and r_date and r_date < start_date:
-            continue
-        if end_date and r_date and r_date > end_date:
-            continue
-
-        filtered.append(r)
-        if r_type in type_counts:
-            type_counts[r_type] += 1
-        else:
-            type_counts[r_type] = type_counts.get(r_type, 0) + 1
-
-    total = len(filtered)
-    offset = (page - 1) * page_size
-    paged_items = filtered[offset : offset + page_size]
-
-    success_count = sum(1 for r in filtered if r.get("status") in ("completed", "success", None))
-    error_count = total - success_count
-    latencies = [float(r.get("latency_ms")) for r in filtered if r.get("latency_ms") is not None]
-    avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else 145.0
-
-    today_str = datetime.now(timezone.utc).isoformat()[:10]
-    trends = [
-        {"date": today_str, "count": total}
-    ]
-
-    return {
-        "items": paged_items,
-        "page": page,
-        "page_size": page_size,
-        "total": total,
-        "analytics": {
-            "total_predictions": total,
-            "success_count": success_count,
-            "error_count": error_count,
-            "average_latency_ms": avg_latency,
-            "by_type": type_counts,
-            "trends": trends,
-        },
-        "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from persisted system event ledgers.",
-    }
 
 
 @admin_router.get("/system-health")

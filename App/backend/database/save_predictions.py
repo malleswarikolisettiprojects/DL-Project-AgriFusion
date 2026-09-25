@@ -2,12 +2,31 @@ from datetime import datetime, timezone
 from App.backend.database.database import supabase
 
 
+def _get_admin_client():
+    try:
+        from App.backend.settings import create_supabase_admin_client
+        admin_c = create_supabase_admin_client()
+        if admin_c is not None:
+            return admin_c
+    except Exception:
+        pass
+    return supabase
+
+
 def _save_to_prediction_records(user_id, prediction_type, request_payload, result_payload):
-    if supabase is None:
+    """
+    Saves to farmer personal history table (prediction_records).
+    REQUIRES non-null user_id (enforced by DB NOT NULL constraint and RLS).
+    Does NOTHING if user_id is missing/anonymous.
+    """
+    if not user_id:
+        return
+    client = _get_admin_client()
+    if client is None:
         return
     try:
         now = datetime.now(timezone.utc).isoformat()
-        supabase.table("prediction_records").insert({
+        client.table("prediction_records").insert({
             "user_id": user_id,
             "prediction_type": prediction_type,
             "request_payload": request_payload or {},
@@ -20,22 +39,67 @@ def _save_to_prediction_records(user_id, prediction_type, request_payload, resul
         print(f"Warning: Could not save to prediction_records: {e}")
 
 
+def log_ml_prediction_event(data: dict) -> dict:
+    """
+    Inserts a system inference activity event into public.ml_prediction_events.
+    Uses privileged admin client. Privacy-minimized (no secrets, passwords, or raw PII).
+    Returns {"telemetry_saved": bool, "error": str | None, "event_id": str | None}.
+    """
+    admin_client = _get_admin_client()
+    if admin_client is None:
+        print("Warning: Telemetry save failed: No Supabase client available")
+        return {"telemetry_saved": False, "error": "No Supabase client available"}
+
+    try:
+        model_type = data.get("model_type") or "unknown"
+        crop = data.get("crop")
+        state = data.get("state")
+        district = data.get("district")
+        request_summary = data.get("request_summary") or {}
+        result_summary = data.get("result_summary") or {}
+        status = data.get("status") or "success"
+        latency_ms = data.get("latency_ms")
+        error_code = data.get("error_code")
+        user_id = data.get("user_id")
+
+        payload = {
+            "model_type": model_type,
+            "crop": crop,
+            "state": state,
+            "district": district,
+            "request_summary": request_summary,
+            "result_summary": result_summary,
+            "status": status,
+            "latency_ms": latency_ms,
+            "error_code": error_code,
+            "user_id": user_id,
+        }
+
+        res = admin_client.table("ml_prediction_events").insert(payload).execute()
+        saved = bool(res and res.data)
+        event_id = res.data[0]["id"] if saved and len(res.data) > 0 else None
+        return {"telemetry_saved": saved, "event_id": event_id}
+    except Exception as e:
+        print(f"Warning: Could not save ML prediction event telemetry: {e}")
+        return {"telemetry_saved": False, "error": str(e)}
+
+
 # ============================================================
 # 1. SAVE CROP PREDICTION
 # ============================================================
 
 def save_crop_prediction(data):
-    try:
+    user_id = data.get("user_id")
+    if user_id:
         _save_to_prediction_records(
-            user_id=data.get("user_id"),
+            user_id=user_id,
             prediction_type="crop_recommendation",
             request_payload={"state": data.get("state"), "district": data.get("district"), "season": data.get("season")},
             result_payload={"predicted_crop": data.get("predicted_crop"), "confidence": data.get("confidence")},
         )
-        response = (
-            supabase
-            .table("crop_prediction")
-            .insert({
+    try:
+        if supabase:
+            supabase.table("crop_prediction").insert({
                 "state": data.get("state"),
                 "district": data.get("district"),
                 "season": data.get("season"),
@@ -54,13 +118,23 @@ def save_crop_prediction(data):
                 "cec": data.get("cec"),
                 "predicted_crop": data.get("predicted_crop"),
                 "confidence": data.get("confidence"),
-            })
-            .execute()
-        )
-        return response
+            }).execute()
     except Exception as e:
-        print(f"Warning: Could not save crop prediction to Supabase: {e}")
-        return None
+        print(f"Warning: Could not save crop prediction to legacy table: {e}")
+
+    crop_val = data.get("predicted_crop") or data.get("recommended_crop")
+    return log_ml_prediction_event({
+        "model_type": "crop_recommendation",
+        "crop": crop_val,
+        "state": data.get("state"),
+        "district": data.get("district"),
+        "request_summary": data.get("request_summary") or {"village": data.get("village"), "season": data.get("season")},
+        "result_summary": data.get("result_summary") or {"predicted_crop": crop_val, "confidence": data.get("confidence")},
+        "status": data.get("status", "success"),
+        "latency_ms": data.get("latency_ms"),
+        "error_code": data.get("error_code"),
+        "user_id": user_id,
+    })
 
 
 # ============================================================
@@ -68,17 +142,17 @@ def save_crop_prediction(data):
 # ============================================================
 
 def save_irrigation_prediction(data):
-    try:
+    user_id = data.get("user_id")
+    if user_id:
         _save_to_prediction_records(
-            user_id=data.get("user_id"),
+            user_id=user_id,
             prediction_type="irrigation_schedule",
             request_payload={"crop": data.get("crop"), "state": data.get("state"), "soil_type": data.get("soil_type")},
             result_payload={"predicted_irrigation": data.get("predicted_irrigation")},
         )
-        response = (
-            supabase
-            .table("irrigation_prediction")
-            .insert({
+    try:
+        if supabase:
+            supabase.table("irrigation_prediction").insert({
                 "state": data.get("state"),
                 "city": data.get("city"),
                 "crop": data.get("crop"),
@@ -104,13 +178,22 @@ def save_irrigation_prediction(data):
                 "soil_type": data.get("soil_type"),
                 "root_depth_m": data.get("root_depth_m"),
                 "predicted_irrigation": data.get("predicted_irrigation"),
-            })
-            .execute()
-        )
-        return response
+            }).execute()
     except Exception as e:
-        print(f"Warning: Could not save irrigation prediction to Supabase: {e}")
-        return None
+        print(f"Warning: Could not save irrigation prediction to legacy table: {e}")
+
+    return log_ml_prediction_event({
+        "model_type": "irrigation_scheduling",
+        "crop": data.get("crop"),
+        "state": data.get("state"),
+        "district": data.get("district"),
+        "request_summary": data.get("request_summary") or {"soil_type": data.get("soil_type")},
+        "result_summary": data.get("result_summary") or {"predicted_irrigation": data.get("predicted_irrigation")},
+        "status": data.get("status", "success"),
+        "latency_ms": data.get("latency_ms"),
+        "error_code": data.get("error_code"),
+        "user_id": user_id,
+    })
 
 
 # ============================================================
@@ -118,17 +201,17 @@ def save_irrigation_prediction(data):
 # ============================================================
 
 def save_climate_prediction(data):
-    try:
+    user_id = data.get("user_id")
+    if user_id:
         _save_to_prediction_records(
-            user_id=data.get("user_id"),
+            user_id=user_id,
             prediction_type="climate_risk",
             request_payload={"city": data.get("city"), "state": data.get("state"), "crop": data.get("crop")},
             result_payload={"predicted_climate_risk": data.get("predicted_climate_risk")},
         )
-        response = (
-            supabase
-            .table("climate_prediction")
-            .insert({
+    try:
+        if supabase:
+            supabase.table("climate_prediction").insert({
                 "city": data.get("city"),
                 "state": data.get("state"),
                 "latitude": data.get("latitude"),
@@ -158,13 +241,22 @@ def save_climate_prediction(data):
                 "growing_degree_days": data.get("growing_degree_days"),
                 "crop": data.get("crop"),
                 "predicted_climate_risk": data.get("predicted_climate_risk"),
-            })
-            .execute()
-        )
-        return response
+            }).execute()
     except Exception as e:
-        print(f"Warning: Could not save climate prediction to Supabase: {e}")
-        return None
+        print(f"Warning: Could not save climate prediction to legacy table: {e}")
+
+    return log_ml_prediction_event({
+        "model_type": "climate_risk",
+        "crop": data.get("crop"),
+        "state": data.get("state"),
+        "district": data.get("district") or data.get("city"),
+        "request_summary": data.get("request_summary") or {"city": data.get("city")},
+        "result_summary": data.get("result_summary") or {"predicted_climate_risk": data.get("predicted_climate_risk")},
+        "status": data.get("status", "success"),
+        "latency_ms": data.get("latency_ms"),
+        "error_code": data.get("error_code"),
+        "user_id": user_id,
+    })
 
 
 # ============================================================
@@ -172,17 +264,17 @@ def save_climate_prediction(data):
 # ============================================================
 
 def save_yield_prediction(data):
-    try:
+    user_id = data.get("user_id")
+    if user_id:
         _save_to_prediction_records(
-            user_id=data.get("user_id"),
+            user_id=user_id,
             prediction_type="yield_forecast",
             request_payload={"state": data.get("state"), "district": data.get("district"), "crop": data.get("crop")},
             result_payload={"predicted_yield": data.get("predicted_yield")},
         )
-        response = (
-            supabase
-            .table("yield_prediction")
-            .insert({
+    try:
+        if supabase:
+            supabase.table("yield_prediction").insert({
                 "state": data.get("state"),
                 "district": data.get("district"),
                 "village": data.get("village"),
@@ -209,13 +301,22 @@ def save_yield_prediction(data):
                 "silt": data.get("silt"),
                 "elevation": data.get("elevation"),
                 "predicted_yield": data.get("predicted_yield"),
-            })
-            .execute()
-        )
-        return response
+            }).execute()
     except Exception as e:
-        print(f"Warning: Could not save yield prediction to Supabase: {e}")
-        return None
+        print(f"Warning: Could not save yield prediction to legacy table: {e}")
+
+    return log_ml_prediction_event({
+        "model_type": "yield_prediction",
+        "crop": data.get("crop"),
+        "state": data.get("state"),
+        "district": data.get("district"),
+        "request_summary": data.get("request_summary") or {"season": data.get("season"), "year": data.get("year"), "area": data.get("area")},
+        "result_summary": data.get("result_summary") or {"predicted_yield": data.get("predicted_yield")},
+        "status": data.get("status", "success"),
+        "latency_ms": data.get("latency_ms"),
+        "error_code": data.get("error_code"),
+        "user_id": user_id,
+    })
 
 
 # ============================================================
@@ -223,17 +324,17 @@ def save_yield_prediction(data):
 # ============================================================
 
 def save_market_prediction(data):
-    try:
+    user_id = data.get("user_id")
+    if user_id:
         _save_to_prediction_records(
-            user_id=data.get("user_id"),
+            user_id=user_id,
             prediction_type="market_price",
             request_payload={"commodity": data.get("commodity"), "state": data.get("state"), "district": data.get("district")},
             result_payload={"predicted_market_price": data.get("predicted_market_price")},
         )
-        response = (
-            supabase
-            .table("market_prediction")
-            .insert({
+    try:
+        if supabase:
+            supabase.table("market_prediction").insert({
                 "commodity": data.get("commodity"),
                 "state": data.get("state"),
                 "district": data.get("district"),
@@ -243,24 +344,23 @@ def save_market_prediction(data):
                 "quarter": data.get("quarter"),
                 "arrival_quantity": data.get("arrival_quantity"),
                 "predicted_market_price": data.get("predicted_market_price"),
-            })
-            .execute()
-        )
-        return response
+            }).execute()
     except Exception as e:
-        print(f"Warning: Could not save market prediction to Supabase: {e}")
-        return None
+        print(f"Warning: Could not save market prediction to legacy table: {e}")
 
-
-def _get_admin_client():
-    try:
-        from App.backend.settings import create_supabase_admin_client
-        admin_c = create_supabase_admin_client()
-        if admin_c is not None:
-            return admin_c
-    except Exception:
-        pass
-    return supabase
+    commodity_val = data.get("commodity") or data.get("crop")
+    return log_ml_prediction_event({
+        "model_type": "market_price_forecasting",
+        "crop": commodity_val,
+        "state": data.get("state"),
+        "district": data.get("district"),
+        "request_summary": data.get("request_summary") or {"commodity": commodity_val},
+        "result_summary": data.get("result_summary") or {"predicted_market_price": data.get("predicted_market_price")},
+        "status": data.get("status", "success"),
+        "latency_ms": data.get("latency_ms"),
+        "error_code": data.get("error_code"),
+        "user_id": user_id,
+    })
 
 
 # ============================================================
@@ -305,8 +405,7 @@ def save_disease_prediction(data):
         except Exception as e:
             print(f"Warning: Could not save disease prediction to prediction_records: {e}")
 
-    # 2. Save to disease_prediction telemetry table using server-only privileged admin client
-    telemetry_saved = False
+    # 2. Save to disease_prediction telemetry table
     try:
         insert_payload = {
             "user_email":              data.get("user_email"),
@@ -321,7 +420,6 @@ def save_disease_prediction(data):
             "all_detections":          data.get("all_detections"),
             "custom_crop_notice":      data.get("custom_crop_notice"),
         }
-        # Only set state/district if explicitly provided (do not invent default values)
         if data.get("state"):
             insert_payload["state"] = data.get("state")
         if data.get("district"):
@@ -329,16 +427,28 @@ def save_disease_prediction(data):
         if data.get("status"):
             insert_payload["status"] = data.get("status")
 
-        response = (
-            admin_client
-            .table("disease_prediction")
-            .insert(insert_payload)
-            .execute()
-        )
-        if response and response.data:
-            telemetry_saved = True
-            print(f"Info: Successfully persisted disease prediction telemetry record for crop={data.get('crop')}")
-        return {"telemetry_saved": telemetry_saved, "response": response}
+        admin_client.table("disease_prediction").insert(insert_payload).execute()
     except Exception as e:
         print(f"Warning: Could not save disease prediction to disease_prediction table: {e}")
-        return {"telemetry_saved": False, "error": str(e)}
+
+    # 3. Save to unified ml_prediction_events table
+    top_diag = data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient") or "No issue detected"
+    conf = data.get("top_disease_confidence") or data.get("top_pest_confidence") or data.get("top_nutrient_confidence")
+    return log_ml_prediction_event({
+        "model_type": "disease_detection",
+        "crop": data.get("crop"),
+        "state": data.get("state"),
+        "district": data.get("district"),
+        "request_summary": data.get("request_summary") or {"crop": data.get("crop")},
+        "result_summary": data.get("result_summary") or {
+            "primary_diagnosis": top_diag,
+            "confidence": conf,
+            "top_disease": data.get("top_disease"),
+            "top_pest": data.get("top_pest"),
+            "top_nutrient": data.get("top_nutrient"),
+        },
+        "status": data.get("status", "success"),
+        "latency_ms": data.get("latency_ms"),
+        "error_code": data.get("error_code"),
+        "user_id": user_id,
+    })

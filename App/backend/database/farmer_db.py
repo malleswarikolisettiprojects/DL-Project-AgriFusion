@@ -738,3 +738,167 @@ def update_user_preferences(user_id: str, prefs: Dict[str, Any]) -> Dict[str, An
     except Exception as e:
         logger.error(f"Error updating preferences for user {user_id}: {e}")
     return record
+
+
+# -----------------------------------------------------------------------------
+# 8. ML Predictions Activity Log (System Telemetry Reader for Admin)
+# -----------------------------------------------------------------------------
+def get_ml_predictions_for_admin(
+    page: int = 1,
+    page_size: int = 25,
+    model_type: Optional[str] = None,
+    prediction_type: Optional[str] = None,
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    crop: Optional[str] = None,
+    status: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+) -> dict:
+    """
+    Fetch ML prediction activity records and summary metrics from public.ml_prediction_events.
+    Supports filtering, pagination, search, accurate total count, and cohort aggregate metrics.
+    Fails closed with RuntimeError on database errors.
+    """
+    from App.backend.database.save_predictions import _get_admin_client
+    admin_client = _get_admin_client()
+
+    if admin_client is None:
+        from App.backend.settings import SUPABASE_URL
+        if SUPABASE_URL:
+            raise RuntimeError("Database query failed: Server-side Supabase admin client unavailable.")
+        return {
+            "items": [],
+            "page": page,
+            "page_size": page_size,
+            "total": 0,
+            "analytics": {
+                "total_predictions": 0,
+                "success_count": 0,
+                "error_count": 0,
+                "average_latency_ms": None,
+                "by_type": {},
+                "by_crop": {},
+                "by_status": {},
+                "trends": [],
+            },
+            "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from system event ledgers.",
+        }
+
+    try:
+        base_query = admin_client.table("ml_prediction_events").select("*", count="exact")
+
+        target_model = model_type or prediction_type
+        if target_model:
+            tm = target_model.strip().lower()
+            alias_map = {
+                "crop": "crop_recommendation",
+                "irrigation": "irrigation_scheduling",
+                "irrigation_schedule": "irrigation_scheduling",
+                "yield": "yield_prediction",
+                "yield_forecast": "yield_prediction",
+                "market": "market_price_forecasting",
+                "market_price": "market_price_forecasting",
+                "disease": "disease_detection",
+            }
+            mapped_model = alias_map.get(tm, tm)
+            base_query = base_query.ilike("model_type", f"%{mapped_model}%")
+
+        if state:
+            base_query = base_query.ilike("state", f"%{state.strip()}%")
+        if district:
+            base_query = base_query.ilike("district", f"%{district.strip()}%")
+        if crop:
+            base_query = base_query.ilike("crop", f"%{crop.strip()}%")
+        if status:
+            base_query = base_query.eq("status", status.strip())
+        if start_date:
+            base_query = base_query.gte("created_at", start_date.strip())
+        if end_date:
+            base_query = base_query.lte("created_at", end_date.strip())
+        if search:
+            term = search.strip()
+            base_query = base_query.or_(f"model_type.ilike.%{term}%,crop.ilike.%{term}%,state.ilike.%{term}%,district.ilike.%{term}%")
+
+        full_res = base_query.order("created_at", desc=True).execute()
+        if full_res.data is None:
+            raise RuntimeError("Database query returned null response for ml_prediction_events")
+
+        cohort_records = full_res.data
+        total_count = full_res.count if full_res.count is not None else len(cohort_records)
+
+        offset = (page - 1) * page_size
+        if total_count == 0 or offset >= total_count:
+            paged_records = []
+        else:
+            paged_records = cohort_records[offset : offset + page_size]
+
+        formatted_items = []
+        for r in paged_records:
+            formatted_items.append({
+                "id": str(r.get("id")),
+                "created_at": r.get("created_at"),
+                "model_type": r.get("model_type"),
+                "prediction_type": r.get("model_type"),
+                "crop": r.get("crop"),
+                "state": r.get("state"),
+                "district": r.get("district"),
+                "request_summary": r.get("request_summary") or {},
+                "result_summary": r.get("result_summary") or {},
+                "status": r.get("status") or "success",
+                "latency_ms": float(r["latency_ms"]) if r.get("latency_ms") is not None else None,
+                "error_code": r.get("error_code"),
+                "user_id": str(r["user_id"]) if r.get("user_id") else None,
+            })
+
+        success_count = sum(1 for r in cohort_records if r.get("status") == "success")
+        error_count = sum(1 for r in cohort_records if r.get("status") == "failed")
+        
+        latencies = [float(r["latency_ms"]) for r in cohort_records if r.get("latency_ms") is not None]
+        avg_latency = round(sum(latencies) / len(latencies), 2) if latencies else None
+
+        by_type = {}
+        by_crop = {}
+        by_status = {}
+        date_counts = {}
+
+        for r in cohort_records:
+            mt = r.get("model_type") or "unknown"
+            by_type[mt] = by_type.get(mt, 0) + 1
+
+            cr = r.get("crop")
+            if cr:
+                by_crop[cr] = by_crop.get(cr, 0) + 1
+
+            st = r.get("status") or "success"
+            by_status[st] = by_status.get(st, 0) + 1
+
+            ca = r.get("created_at")
+            if ca:
+                d_str = str(ca)[:10]
+                date_counts[d_str] = date_counts.get(d_str, 0) + 1
+
+        trends = [{"date": d, "count": c} for d, c in sorted(date_counts.items())]
+
+        return {
+            "items": formatted_items,
+            "page": page,
+            "page_size": page_size,
+            "total": total_count,
+            "analytics": {
+                "total_predictions": total_count,
+                "success_count": success_count,
+                "error_count": error_count,
+                "average_latency_ms": avg_latency,
+                "by_type": by_type,
+                "by_crop": by_crop,
+                "by_status": by_status,
+                "trends": trends,
+            },
+            "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from system event ledgers.",
+        }
+    except Exception as e:
+        logger.error(f"Error fetching ML predictions for admin: {e}")
+        raise RuntimeError("Database query failed for ML predictions activity log") from e
+

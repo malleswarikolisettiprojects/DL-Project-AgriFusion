@@ -637,4 +637,47 @@ USING (
   )
 );
 
+-- -----------------------------------------------------------------------------
+-- SECTION 14: ML Prediction Events (System Telemetry for Admin Activity Log)
+-- -----------------------------------------------------------------------------
+
+CREATE TABLE IF NOT EXISTS public.ml_prediction_events (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    model_type TEXT NOT NULL,
+    crop TEXT,
+    state TEXT,
+    district TEXT,
+    request_summary JSONB DEFAULT '{}'::jsonb,
+    result_summary JSONB DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL DEFAULT 'success',
+    latency_ms NUMERIC(10, 2),
+    error_code TEXT,
+    user_id UUID
+);
+
+CREATE INDEX IF NOT EXISTS idx_ml_pred_created_at ON public.ml_prediction_events(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ml_pred_model_type ON public.ml_prediction_events(model_type);
+CREATE INDEX IF NOT EXISTS idx_ml_pred_crop ON public.ml_prediction_events(crop);
+CREATE INDEX IF NOT EXISTS idx_ml_pred_state ON public.ml_prediction_events(state);
+CREATE INDEX IF NOT EXISTS idx_ml_pred_user_id ON public.ml_prediction_events(user_id);
+
+ALTER TABLE public.ml_prediction_events ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow telemetry insert for ml_prediction_events" ON public.ml_prediction_events;
+DROP POLICY IF EXISTS "Admins select update delete ml_prediction_events" ON public.ml_prediction_events;
+
+CREATE POLICY "Allow telemetry insert for ml_prediction_events" ON public.ml_prediction_events FOR INSERT
+WITH CHECK (true);
+
+CREATE POLICY "Admins select update delete ml_prediction_events" ON public.ml_prediction_events FOR ALL
+USING (
+  auth.role() = 'service_role' OR EXISTS (
+    SELECT 1 FROM public.profiles
+    WHERE profiles.id = auth.uid()
+    AND profiles.role IN ('admin', 'super_admin', 'auditor', 'agronomist', 'editor')
+  )
+);
+
+
 
