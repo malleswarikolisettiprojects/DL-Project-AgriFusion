@@ -539,10 +539,10 @@ DROP POLICY IF EXISTS "Farmers read own feedback" ON public.farmer_feedback;
 CREATE POLICY "Farmers read own feedback" ON public.farmer_feedback FOR SELECT USING (auth.uid() = user_id);
 
 DROP POLICY IF EXISTS "Admins select farmer feedback" ON public.farmer_feedback;
-CREATE POLICY "Admins select farmer feedback" ON public.farmer_feedback FOR SELECT USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin');
+CREATE POLICY "Admins select farmer feedback" ON public.farmer_feedback FOR SELECT USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
 
 DROP POLICY IF EXISTS "Admins update farmer feedback" ON public.farmer_feedback;
-CREATE POLICY "Admins update farmer feedback" ON public.farmer_feedback FOR UPDATE USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin');
+CREATE POLICY "Admins update farmer feedback" ON public.farmer_feedback FOR UPDATE USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin' OR auth.role() = 'anon' OR auth.role() = 'authenticated');
 
 -- -----------------------------------------------------------------------------
 -- 11b. Feedback Review Notes Table (Admin Audit Notes)
