@@ -303,8 +303,13 @@ def load_local_agronomy_documents(force_reload: bool = False) -> List[Dict[str, 
     return docs
 
 
+_LOCAL_CHUNKS_CACHE = None
+
 def chunk_local_documents(docs: List[Dict[str, Any]], chunk_words: int = 250, overlap: int = 50) -> List[Dict[str, Any]]:
     """Split local document text into word-level chunks for high-precision vector search."""
+    global _LOCAL_CHUNKS_CACHE
+    if _LOCAL_CHUNKS_CACHE is not None:
+        return _LOCAL_CHUNKS_CACHE
     chunks = []
     step = chunk_words - overlap
     for doc in docs:
@@ -323,6 +328,7 @@ def chunk_local_documents(docs: List[Dict[str, Any]], chunk_words: int = 250, ov
                     "text": chunk_text,
                     "file_type": doc["file_type"],
                 })
+    _LOCAL_CHUNKS_CACHE = chunks
     return chunks
 
 
