@@ -824,3 +824,118 @@ def fetch_regional_farm_profiles(
         "privacy_note": privacy_note,
     }
 
+
+def fetch_filtered_farm_count(
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    crop: Optional[str] = None,
+    area_range: Optional[str] = None,
+    irrigation_type: Optional[str] = None,
+    privacy_threshold: int = 5,
+) -> dict:
+    """
+    Fetch filtered farm count from public.farms for Farms & Coverage admin page.
+    Applies server-side filtering on state, district, crop, area_range, and irrigation_type.
+    Enforces cohort privacy threshold:
+      - If matching count == 0: count = 0, suppressed = False, privacy_note = "No farms match the selected filters."
+      - If 1 <= matching count < privacy_threshold: count = None, suppressed = True, privacy_note = "Fewer than {privacy_threshold} farms match the selected filters; exact count is suppressed for privacy."
+      - If matching count >= privacy_threshold: count = N, suppressed = False, privacy_note = "Count of farms matching the selected filters."
+    Raises RuntimeError on database failure (fails closed with 500 error).
+    """
+    init_db()
+    supabase = _get_supabase_admin()
+    records = None
+
+    if supabase is not None:
+        try:
+            res = (
+                supabase.table("farms")
+                .select("state, district, crop, land_area, land_area_unit, irrigation_type")
+                .execute()
+            )
+            if res.data is not None:
+                records = res.data
+            else:
+                logger.error("Supabase query on public.farms returned None response")
+                raise RuntimeError("Database query failed for farm count")
+        except Exception as exc:
+            logger.error("Supabase farms DB query failure: %s", exc)
+            raise RuntimeError("Database query failed for farm count") from exc
+
+    if records is None:
+        from App.backend.settings import SUPABASE_URL
+        if SUPABASE_URL:
+            raise RuntimeError("Database query failed for farm count: Server-side Supabase client unavailable.")
+        try:
+            conn = _get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT state, district, crop, land_area, land_area_unit, irrigation_type FROM farms")
+            rows = cursor.fetchall()
+            records = [dict(r) for r in rows]
+            conn.close()
+        except Exception as exc:
+            logger.error("SQLite farms query failure: %s", exc)
+            raise RuntimeError("Database query failed for farm count") from exc
+
+    matching_count = 0
+
+    for rec in records:
+        r_state = (rec.get("state") or "").strip()
+        r_district = (rec.get("district") or "").strip()
+        r_crop = (rec.get("crop") or "").strip()
+        r_irrigation = (rec.get("irrigation_type") or "").strip()
+        area_val = rec.get("land_area")
+        unit_val = rec.get("land_area_unit")
+        r_area_range = _map_area_range(area_val, unit_val)
+
+        # Apply server-side filters
+        if state and r_state.lower() != state.strip().lower():
+            continue
+        if district and r_district.lower() != district.strip().lower():
+            continue
+        if crop and r_crop.lower() != crop.strip().lower():
+            continue
+        if irrigation_type and r_irrigation.lower() != irrigation_type.strip().lower():
+            continue
+        if area_range:
+            req_range = area_range.strip().lower()
+            mapped_range = (r_area_range or "").strip().lower()
+            if req_range not in (mapped_range, mapped_range.replace("–", "-")):
+                continue
+
+        matching_count += 1
+
+    filters_applied = {
+        "state": state,
+        "district": district,
+        "crop": crop,
+        "area_range": area_range,
+        "irrigation_type": irrigation_type,
+    }
+
+    if matching_count == 0:
+        return {
+            "count": 0,
+            "filters_applied": filters_applied,
+            "suppressed": False,
+            "privacy_threshold": privacy_threshold,
+            "privacy_note": "No farms match the selected filters.",
+        }
+    elif matching_count < privacy_threshold:
+        return {
+            "count": None,
+            "filters_applied": filters_applied,
+            "suppressed": True,
+            "privacy_threshold": privacy_threshold,
+            "privacy_note": f"Fewer than {privacy_threshold} farms match the selected filters; exact count is suppressed for privacy.",
+        }
+    else:
+        return {
+            "count": matching_count,
+            "filters_applied": filters_applied,
+            "suppressed": False,
+            "privacy_threshold": privacy_threshold,
+            "privacy_note": "Count of farms matching the selected filters.",
+        }
+
+

@@ -51,6 +51,7 @@ from App.backend.database.auth_db import (
     count_active_admins_in_db,
     fetch_all_supabase_predictions,
     fetch_all_users,
+    fetch_filtered_farm_count,
     fetch_regional_farm_profiles,
     get_user_by_id,
     update_user_role_in_db,
@@ -311,21 +312,35 @@ class UpdateUserRoleRequest(BaseModel):
     role: UserRole
 
 
-class RegionalFarmProfile(BaseModel):
-    state: str
-    district: str
+class AdminFarmsCountFilters(BaseModel):
+    state: Optional[str] = None
+    district: Optional[str] = None
     crop: Optional[str] = None
     area_range: Optional[str] = None
     irrigation_type: Optional[str] = None
 
 
-class RegionalFarmProfileResponse(BaseModel):
-    items: List[RegionalFarmProfile]
-    page: int
-    page_size: int
-    total: int
-    suppressed_groups: int = 0
-    privacy_note: str
+class AdminFarmsCountResponse(BaseModel):
+    count: Optional[int] = Field(
+        None,
+        description="Total number of farms matching the selected filters. Returns null if suppressed due to cohort privacy threshold."
+    )
+    filters_applied: AdminFarmsCountFilters = Field(
+        ...,
+        description="Server-side filters applied to the query."
+    )
+    suppressed: bool = Field(
+        ...,
+        description="True if matching count is between 1 and privacy_threshold - 1, suppressing exact count for privacy."
+    )
+    privacy_threshold: int = Field(
+        5,
+        description="Minimum matching cohort size required to reveal exact count."
+    )
+    privacy_note: str = Field(
+        ...,
+        description="Privacy message explaining whether count is displayed, zero, or suppressed."
+    )
 
 
 AdvisoryActivityStatus = Literal["success", "no_verified_source", "failed", "partial"]
@@ -587,8 +602,8 @@ async def admin_overview(
 
     # Farms count
     try:
-        farms_res = fetch_regional_farm_profiles(page=1, page_size=1, min_group_threshold=1)
-        farm_counts = farms_res.get("total", 0) if isinstance(farms_res, dict) else 0
+        farms_count_res = fetch_filtered_farm_count(privacy_threshold=1)
+        farm_counts = farms_count_res.get("count", 0) or 0
     except Exception:
         farm_counts = 0
 
@@ -959,54 +974,55 @@ async def update_user_role(
 
 @admin_router.get(
     "/farms",
-    response_model=RegionalFarmProfileResponse,
+    response_model=AdminFarmsCountResponse,
 )
-async def get_regional_farm_profiles(
-    state: Optional[str] = Query(None),
-    district: Optional[str] = Query(None),
-    crop: Optional[str] = Query(None),
-    irrigation_type: Optional[str] = Query(None),
-    min_group_threshold: int = Query(5, ge=1, le=50),
-    page: int = Query(1, ge=1),
-    page_size: int = Query(25, ge=1, le=100),
+async def get_admin_farms(
+    state: Optional[str] = Query(None, description="Filter farms by state name"),
+    district: Optional[str] = Query(None, description="Filter farms by district name"),
+    crop: Optional[str] = Query(None, description="Filter farms by crop name"),
+    area_range: Optional[str] = Query(None, description="Filter farms by land area range (e.g. '<1 acre', '1–2 acres', '2–5 acres', '5–10 acres', '>10 acres')"),
+    irrigation_type: Optional[str] = Query(None, description="Filter farms by irrigation type (e.g. 'rainfed', 'drip', 'canal')"),
+    privacy_threshold: int = Query(5, ge=1, le=50, description="Minimum cohort size required to display exact count"),
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """
-    Retrieve privacy-preserving aggregated regional farm profile data.
-    Suppresses small groups below the privacy threshold (minimum 5 records by default).
-    Only returns minimized regional attributes (state, district, crop, area_range, irrigation_type).
-    Fails closed with 500 error if database query fails.
+    Retrieve privacy-preserving count of farms for Farms & Coverage admin page.
+    Applies server-side filtering on state, district, crop, area_range, and irrigation_type.
+    Returns counts ONLY:
+      - Returns exact count if count >= privacy_threshold (default 5).
+      - Returns count=null, suppressed=true if 1 <= count < privacy_threshold.
+      - Returns count=0, suppressed=false if count == 0.
+      - Fails closed with 500 error if database query fails.
+    Never returns farm IDs, user IDs, names, villages, coordinates, or individual farm records.
     """
     await record_audit_event(
         admin_user_id=admin_user.id,
-        action="regional_farm_profiles_viewed",
-        target_type="farm_profiles",
+        action="admin_farms_count_viewed",
+        target_type="farms_coverage",
         safe_metadata={
             "filters": {
                 "state": state,
                 "district": district,
                 "crop": crop,
+                "area_range": area_range,
                 "irrigation_type": irrigation_type,
             },
-            "min_group_threshold": min_group_threshold,
-            "page": page,
-            "page_size": page_size,
+            "privacy_threshold": privacy_threshold,
         },
     )
 
     try:
-        data = fetch_regional_farm_profiles(
+        data = fetch_filtered_farm_count(
             state=state,
             district=district,
             crop=crop,
+            area_range=area_range,
             irrigation_type=irrigation_type,
-            page=page,
-            page_size=page_size,
-            min_group_threshold=min_group_threshold,
+            privacy_threshold=privacy_threshold,
         )
         return data
     except Exception as exc:
-        logger.error("Admin regional farm profiles endpoint error: %s", exc)
+        logger.error("Admin farms count endpoint error: %s", exc)
         raise HTTPException(
             status_code=500,
             detail="The backend encountered an internal error.",

@@ -251,23 +251,16 @@ def test_admin_user_ids_allowlist(mock_verify):
 def test_admin_get_farms(mock_verify):
     token = generate_test_jwt(user_id="adm-1", role="admin")
     headers = {"Authorization": f"Bearer {token}"}
-    response = client.get("/api/v1/admin/farms?page=1&page_size=25", headers=headers)
+    response = client.get("/api/v1/admin/farms?privacy_threshold=5", headers=headers)
     assert response.status_code == 200
     data = response.json()
-    assert "items" in data
-    assert "total" in data
+    assert "count" in data
+    assert "filters_applied" in data
+    assert "suppressed" in data
+    assert "privacy_threshold" in data
     assert "privacy_note" in data
-    assert "suppressed_groups" in data
-    # Verify no private sensitive fields in returned items
-    for item in data.get("items", []):
-        assert "user_id" not in item
-        assert "farmer_id" not in item
-        assert "email" not in item
-        assert "name" not in item
-        assert "village" not in item
-        assert "latitude" not in item
-        assert "longitude" not in item
-        assert "exact_area" not in item
+    assert "items" not in data
+    assert "farms" not in data
 
 
 def test_admin_get_farms_unauthenticated():
@@ -284,10 +277,10 @@ def test_admin_get_farms_normal_user(mock_verify):
 
 
 @patch("App.backend.auth.dependencies.verify_access_token", side_effect=mock_verify_access_token)
-def test_admin_get_farms_invalid_page_size(mock_verify):
+def test_admin_get_farms_invalid_privacy_threshold(mock_verify):
     token = generate_test_jwt(user_id="adm-1", role="admin")
     headers = {"Authorization": f"Bearer {token}"}
-    response = client.get("/api/v1/admin/farms?page_size=500", headers=headers)
+    response = client.get("/api/v1/admin/farms?privacy_threshold=500", headers=headers)
     assert response.status_code == 422
 
 

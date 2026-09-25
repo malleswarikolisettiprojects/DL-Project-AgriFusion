@@ -115,7 +115,7 @@ def test_contract_admin_farms_aggregate():
     mock_select = MagicMock()
     mock_table.select.return_value = mock_select
 
-    # 5 identical farms in Visakhapatnam to meet min_group_threshold=5
+    # 5 identical farms in Visakhapatnam to meet privacy_threshold=5
     records = [
         {"state": "Andhra Pradesh", "district": "Visakhapatnam", "crop": "Rice", "land_area": 3.0, "land_area_unit": "acres", "irrigation_type": "Drip"}
         for _ in range(5)
@@ -129,13 +129,14 @@ def test_contract_admin_farms_aggregate():
         res = client.get("/api/v1/admin/farms")
         assert res.status_code == 200
         data = res.json()
-        assert "items" in data
-        assert "total" in data
-        assert "suppressed_groups" in data
+        assert "count" in data
+        assert "filters_applied" in data
+        assert "suppressed" in data
+        assert "privacy_threshold" in data
         assert "privacy_note" in data
-        assert data["total"] == 1
-        item = data["items"][0]
-        assert set(item.keys()) == {"state", "district", "crop", "area_range", "irrigation_type"}
+        assert data["count"] == 5
+        assert data["suppressed"] is False
+        assert "items" not in data
 
     app.dependency_overrides.clear()
 

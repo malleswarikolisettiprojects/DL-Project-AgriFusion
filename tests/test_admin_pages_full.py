@@ -149,27 +149,21 @@ def test_admin_farms_and_coverage_privacy():
     token = generate_test_jwt(role="admin")
     headers = {"Authorization": f"Bearer {token}"}
 
-    res = client.get("/api/v1/admin/farms?min_group_threshold=5", headers=headers)
+    res = client.get("/api/v1/admin/farms?privacy_threshold=5", headers=headers)
     assert res.status_code == 200
     data = res.json()
 
-    assert "items" in data
-    assert "page" in data
-    assert "page_size" in data
-    assert "total" in data
-    assert "suppressed_groups" in data
+    assert "count" in data
+    assert "filters_applied" in data
+    assert "suppressed" in data
+    assert "privacy_threshold" in data
     assert "privacy_note" in data
 
-    # Verify NO PII fields are exposed in items
-    for item in data["items"]:
-        assert "user_id" not in item
-        assert "id" not in item
-        assert "name" not in item
-        assert "village" not in item
-        assert "latitude" not in item
-        assert "longitude" not in item
-        assert "state" in item
-        assert "district" in item
+    # Verify NO PII fields or item lists are returned
+    assert "items" not in data
+    assert "farms" not in data
+    for pii in ("user_id", "name", "village", "latitude", "longitude"):
+        assert pii not in data
 
 
 # -----------------------------------------------------------------------------

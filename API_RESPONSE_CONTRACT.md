@@ -530,26 +530,43 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 #### 3. Farms & Coverage Page (`GET /api/v1/admin/farms`)
 - **Auth**: Authenticated Admin (`require_admin`)
 - **Read/Write**: Read (`public.farms`)
-- **Params**: `state`, `district`, `crop`, `irrigation_type`, `min_group_threshold=5` (default 5, min 1), `page=1`, `page_size=25`
-- **Privacy Rules**: Grouped cohort aggregation ONLY. PII fields (`id`, `user_id`, `name`, `village`, `latitude`, `longitude`) are strictly excluded.
-- **Cohort Threshold Handling**: Matching groups with < 5 records are suppressed.
-- **Success Response (HTTP 200 OK)**:
+- **Params**: `state`, `district`, `crop`, `area_range`, `irrigation_type`, `privacy_threshold=5` (default 5, min 1, max 50)
+- **Privacy & Response Rules**: Count-oriented aggregate response ONLY. Individual farm rows, grouped profile lists, and PII fields (`id`, `user_id`, `name`, `village`, `latitude`, `longitude`) are strictly excluded.
+- **Cohort Threshold Handling**:
+  - `count >= privacy_threshold`: returns exact matching count (e.g. `count: 12`, `suppressed: false`).
+  - `1 <= count < privacy_threshold`: suppresses exact count for privacy (returns `count: null`, `suppressed: true`, and `privacy_note: "Fewer than 5 farms match the selected filters; exact count is suppressed for privacy."`).
+  - `count == 0`: returns `count: 0`, `suppressed: false`, `privacy_note: "No farms match the selected filters."`.
+  - Database Query Failure: Raises HTTP 500 error; never returns 0 or null on query error.
+- **Success Response (HTTP 200 OK - Matching Filtered Count)**:
   ```json
   {
-    "items": [
-      {
-        "state": "Andhra Pradesh",
-        "district": "Visakhapatnam",
-        "crop": "Paddy",
-        "area_range": "5–10 acres",
-        "irrigation_type": "Drip"
-      }
-    ],
-    "page": 1,
-    "page_size": 25,
-    "total": 1,
-    "suppressed_groups": 0,
-    "privacy_note": "Only minimized regional farm information is shown."
+    "count": 12,
+    "filters_applied": {
+      "state": "Andhra Pradesh",
+      "district": "Visakhapatnam",
+      "crop": "Paddy",
+      "area_range": null,
+      "irrigation_type": null
+    },
+    "suppressed": false,
+    "privacy_threshold": 5,
+    "privacy_note": "Count of farms matching the selected filters."
+  }
+  ```
+- **Success Response (HTTP 200 OK - Suppressed Small Cohort)**:
+  ```json
+  {
+    "count": null,
+    "filters_applied": {
+      "state": "Andhra Pradesh",
+      "district": "Visakhapatnam",
+      "crop": "Papaya",
+      "area_range": null,
+      "irrigation_type": null
+    },
+    "suppressed": true,
+    "privacy_threshold": 5,
+    "privacy_note": "Fewer than 5 farms match the selected filters; exact count is suppressed for privacy."
   }
   ```
 
@@ -720,7 +737,7 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 
 1. **`GET /api/v1/admin/farms` vs `GET /api/v1/farms`**:
    - `GET /api/v1/farms` returns a farmer's own farm list (`{"farms": [...], "total": N}`). Frontend reads `data.farms`.
-   - `GET /api/v1/admin/farms` returns privacy-preserving cohort groups (`{"items": [...], "page": 1, "page_size": 25, "total": N, "suppressed_groups": S, "privacy_note": "..."}`). Frontend must read `items` and display `privacy_note`. Never attempt to display `user_id` or farm coordinates from the admin endpoint.
+   - `GET /api/v1/admin/farms` returns privacy-preserving count and filter summary (`{"count": N, "filters_applied": {...}, "suppressed": bool, "privacy_threshold": 5, "privacy_note": "..."}`). Frontend displays the aggregate `count`, active filters, and `privacy_note`. If `suppressed` is true, display the privacy indicator.
 
 2. **Error Responses**:
    - All errors use standard status codes (`401`, `403`, `404`, `422`, `500`) and standard JSON payload `{ "success": false, "stage": "...", "error_code": "...", "message": "..." }`. Frontend code should inspect `res.status` and `data.message`.
