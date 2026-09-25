@@ -609,8 +609,8 @@ CREATE TABLE IF NOT EXISTS public.disease_prediction (
     annotated_image_url TEXT,
     all_detections JSONB DEFAULT '[]'::jsonb,
     custom_crop_notice TEXT,
-    state TEXT DEFAULT 'Andhra Pradesh',
-    district TEXT DEFAULT 'Visakhapatnam',
+    state TEXT,
+    district TEXT,
     status TEXT DEFAULT 'reviewed'
 );
 
@@ -618,8 +618,17 @@ CREATE INDEX IF NOT EXISTS idx_disease_pred_created_at ON public.disease_predict
 CREATE INDEX IF NOT EXISTS idx_disease_pred_crop ON public.disease_prediction(crop);
 
 ALTER TABLE public.disease_prediction ENABLE ROW LEVEL SECURITY;
+
 DROP POLICY IF EXISTS "Admins read and write disease prediction" ON public.disease_prediction;
-CREATE POLICY "Admins read and write disease prediction" ON public.disease_prediction FOR ALL
+DROP POLICY IF EXISTS "Allow telemetry insert for disease_prediction" ON public.disease_prediction;
+DROP POLICY IF EXISTS "Admins select update delete disease prediction" ON public.disease_prediction;
+
+-- 1. Allow backend service & users (authenticated or anon) to INSERT disease prediction telemetry records
+CREATE POLICY "Allow telemetry insert for disease_prediction" ON public.disease_prediction FOR INSERT
+WITH CHECK (true);
+
+-- 2. Restrict SELECT, UPDATE, DELETE strictly to service_role and authorized admins
+CREATE POLICY "Admins select update delete disease prediction" ON public.disease_prediction FOR ALL
 USING (
   auth.role() = 'service_role' OR EXISTS (
     SELECT 1 FROM public.profiles
