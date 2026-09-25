@@ -606,7 +606,7 @@ async def api_predict_disease(
                 predict_disease_and_pests,
                 crop=crop, raw=raw, filename=image.filename or "image.jpg", content_type=content_type
             ),
-            timeout=30.0,
+            timeout=60.0,
         )
         top_detections = result.get("top_detections", [])
         secondary = result.get("secondary_detections", [])
