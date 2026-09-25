@@ -204,7 +204,7 @@ def run_roboflow(config: dict[str, str], raw: bytes, content_type: str) -> dict[
         headers={"Authorization": f"Bearer {ROBOFLOW_API_KEY}"},
         params={"confidence": CONFIDENCE, "overlap": IOU},
         files={"file": ("image", raw, content_type)},
-        timeout=5.0,
+        timeout=3.0,
     )
     response.raise_for_status()
     payload = response.json()
@@ -219,7 +219,7 @@ def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "ima
     model_id = config["model_id"]
     url = f"https://api-inference.huggingface.co/models/{model_id}"
     headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": content_type}
-    response = httpx.post(url, headers=headers, content=raw, timeout=5.0)
+    response = httpx.post(url, headers=headers, content=raw, timeout=3.0)
     response.raise_for_status()
     payload = response.json()
     items = []
@@ -322,7 +322,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     all_configs = crop_configs + SHARED_MODELS["pest"] + SHARED_MODELS["nutrient"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(all_configs) or 1) as executor:
         future_map = {executor.submit(run_provider, cfg, pil_image, raw, content_type): cfg for cfg in all_configs}
-        done, _ = concurrent.futures.wait(future_map.keys(), timeout=12.0)
+        done, _ = concurrent.futures.wait(future_map.keys(), timeout=4.0)
         results_by_config = {}
         for future in future_map.keys():
             cfg = future_map[future]
