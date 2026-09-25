@@ -899,6 +899,27 @@ def get_ml_predictions_for_admin(
             "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from system event ledgers.",
         }
     except Exception as e:
+        err_str = str(e)
+        if "PGRST205" in err_str or "does not exist" in err_str or "schema cache" in err_str or "42P01" in err_str:
+            logger.warning("ml_prediction_events table does not exist in schema cache yet: %s", e)
+            return {
+                "items": [],
+                "page": page,
+                "page_size": page_size,
+                "total": 0,
+                "analytics": {
+                    "total_predictions": 0,
+                    "success_count": 0,
+                    "error_count": 0,
+                    "average_latency_ms": None,
+                    "by_type": {},
+                    "by_crop": {},
+                    "by_status": {},
+                    "trends": [],
+                },
+                "uncollected_metrics_note": "Hardware CPU/RAM consumption per model execution is uncollected; API response latencies and prediction outcome tallies are tracked from system event ledgers.",
+            }
         logger.error(f"Error fetching ML predictions for admin: {e}")
         raise RuntimeError("Database query failed for ML predictions activity log") from e
+
 

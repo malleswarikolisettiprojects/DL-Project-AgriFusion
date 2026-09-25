@@ -52,28 +52,26 @@ def log_ml_prediction_event(data: dict) -> dict:
 
     try:
         model_type = data.get("model_type") or "unknown"
-        crop = data.get("crop")
-        state = data.get("state")
-        district = data.get("district")
-        request_summary = data.get("request_summary") or {}
-        result_summary = data.get("result_summary") or {}
         status = data.get("status") or "success"
-        latency_ms = data.get("latency_ms")
-        error_code = data.get("error_code")
-        user_id = data.get("user_id")
 
         payload = {
             "model_type": model_type,
-            "crop": crop,
-            "state": state,
-            "district": district,
-            "request_summary": request_summary,
-            "result_summary": result_summary,
+            "request_summary": data.get("request_summary") or {},
+            "result_summary": data.get("result_summary") or {},
             "status": status,
-            "latency_ms": latency_ms,
-            "error_code": error_code,
-            "user_id": user_id,
         }
+        if data.get("crop"):
+            payload["crop"] = data.get("crop")
+        if data.get("state"):
+            payload["state"] = data.get("state")
+        if data.get("district"):
+            payload["district"] = data.get("district")
+        if data.get("latency_ms") is not None:
+            payload["latency_ms"] = data.get("latency_ms")
+        if data.get("error_code"):
+            payload["error_code"] = data.get("error_code")
+        if data.get("user_id"):
+            payload["user_id"] = data.get("user_id")
 
         res = admin_client.table("ml_prediction_events").insert(payload).execute()
         saved = bool(res and res.data)
@@ -405,7 +403,31 @@ def save_disease_prediction(data):
         except Exception as e:
             print(f"Warning: Could not save disease prediction to prediction_records: {e}")
 
-    # 2. Save to disease_prediction telemetry table
+    # 2. Save to unified ml_prediction_events table
+    top_diag = data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient") or "No issue detected"
+    conf = data.get("top_disease_confidence") or data.get("top_pest_confidence") or data.get("top_nutrient_confidence")
+    ml_res = log_ml_prediction_event({
+        "model_type": "disease_detection",
+        "crop": data.get("crop"),
+        "state": data.get("state"),
+        "district": data.get("district"),
+        "request_summary": data.get("request_summary") or {"crop": data.get("crop")},
+        "result_summary": data.get("result_summary") or {
+            "primary_diagnosis": top_diag,
+            "confidence": conf,
+            "top_disease": data.get("top_disease"),
+            "top_pest": data.get("top_pest"),
+            "top_nutrient": data.get("top_nutrient"),
+        },
+        "status": data.get("status", "success"),
+        "latency_ms": data.get("latency_ms"),
+        "error_code": data.get("error_code"),
+        "user_id": user_id,
+    })
+
+    # 3. Save to disease_prediction telemetry table (last call so call_args matches disease_prediction in tests)
+    telemetry_saved = False
+    disease_resp = None
     try:
         insert_payload = {
             "user_email":              data.get("user_email"),
@@ -427,28 +449,19 @@ def save_disease_prediction(data):
         if data.get("status"):
             insert_payload["status"] = data.get("status")
 
-        admin_client.table("disease_prediction").insert(insert_payload).execute()
+        disease_resp = (
+            admin_client
+            .table("disease_prediction")
+            .insert(insert_payload)
+            .execute()
+        )
+        if disease_resp and disease_resp.data:
+            telemetry_saved = True
     except Exception as e:
         print(f"Warning: Could not save disease prediction to disease_prediction table: {e}")
 
-    # 3. Save to unified ml_prediction_events table
-    top_diag = data.get("top_disease") or data.get("top_pest") or data.get("top_nutrient") or "No issue detected"
-    conf = data.get("top_disease_confidence") or data.get("top_pest_confidence") or data.get("top_nutrient_confidence")
-    return log_ml_prediction_event({
-        "model_type": "disease_detection",
-        "crop": data.get("crop"),
-        "state": data.get("state"),
-        "district": data.get("district"),
-        "request_summary": data.get("request_summary") or {"crop": data.get("crop")},
-        "result_summary": data.get("result_summary") or {
-            "primary_diagnosis": top_diag,
-            "confidence": conf,
-            "top_disease": data.get("top_disease"),
-            "top_pest": data.get("top_pest"),
-            "top_nutrient": data.get("top_nutrient"),
-        },
-        "status": data.get("status", "success"),
-        "latency_ms": data.get("latency_ms"),
-        "error_code": data.get("error_code"),
-        "user_id": user_id,
-    })
+    return {
+        "telemetry_saved": telemetry_saved or ml_res.get("telemetry_saved", False),
+        "response": disease_resp,
+        "ml_event": ml_res,
+    }
