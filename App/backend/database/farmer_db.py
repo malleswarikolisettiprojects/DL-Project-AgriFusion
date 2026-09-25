@@ -444,20 +444,24 @@ def get_all_diagnostics_for_admin(
                 s_term = search.strip()
                 query = query.or_(f"crop.ilike.%{s_term}%,top_disease.ilike.%{s_term}%,state.ilike.%{s_term}%,district.ilike.%{s_term}%")
 
-            try:
+            # 1. Count matching records first to avoid PostgREST 416 / PGRST103 range errors when offset >= total
+            cnt_query = admin_supabase.table("disease_prediction").select("id", count="exact")
+            if crop and crop.strip(): cnt_query = cnt_query.ilike("crop", f"%{crop.strip()}%")
+            if state and state.strip(): cnt_query = cnt_query.ilike("state", f"%{state.strip()}%")
+            if district and district.strip(): cnt_query = cnt_query.ilike("district", f"%{district.strip()}%")
+            if effective_status: cnt_query = cnt_query.eq("status", effective_status)
+            if start_date: cnt_query = cnt_query.gte("created_at", start_date)
+            if end_date: cnt_query = cnt_query.lte("created_at", end_date)
+            if search and search.strip(): cnt_query = cnt_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
+
+            cnt_res = cnt_query.execute()
+            total = cnt_res.count if cnt_res.count is not None else 0
+
+            if total == 0 or offset >= total:
+                raw_items = []
+            else:
                 res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
                 raw_items = res.data or []
-                total = res.count if res.count is not None else len(raw_items)
-            except Exception as req_err:
-                # If offset is out of range, PostgREST may raise 416 range error.
-                # Check total count to distinguish out-of-range from genuine DB failures.
-                err_str = str(req_err)
-                if "416" in err_str or "PGRST103" in err_str or "range" in err_str.lower():
-                    cnt_res = admin_supabase.table("disease_prediction").select("id", count="exact").execute()
-                    total = cnt_res.count if cnt_res.count is not None else 0
-                    raw_items = []
-                else:
-                    raise req_err
 
             # 2. Build item list with secondary_matches mapping (NO treatment_recommendations alias)
             items = []
