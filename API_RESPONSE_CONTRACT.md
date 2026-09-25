@@ -684,28 +684,54 @@ AgriFusion delegates **100% of persistent data storage** to the FastAPI backend 
 #### 9. Diagnostics & Reports Page (`GET /api/v1/admin/diagnostics`)
 - **Auth**: Authenticated Admin (`require_admin`)
 - **Params**: `crop`, `state`, `district`, `status`, `review_status`, `severity`, `start_date`, `end_date`, `search`, `page=1`, `page_size=25`
+- **Single Source of Truth**: Reads exclusively from `public.disease_prediction` telemetry table (capturing 100% of diagnostic activity for both anonymous and authenticated inferences).
 - **Error Behavior**: Raises **HTTP 500 Internal Server Error** on database infrastructure / query failures. Does NOT mask storage errors as `total: 0`. Valid empty table returns `HTTP 200 OK` with `items: []`, `total: 0`.
 - **Success Response (HTTP 200 OK)**:
   ```json
   {
     "items": [
       {
-        "id": "diag-101",
-        "created_at": "2026-09-25T06:00:00Z",
-        "crop": "Rice",
+        "id": "c7a8f921-3b4e-4f12-a89e-99011234abcd",
+        "created_at": "2026-09-25T16:00:00Z",
+        "crop": "Paddy",
         "state": "Andhra Pradesh",
         "district": "Visakhapatnam",
-        "diagnosis": "Rice Blast",
-        "confidence": 0.94,
-        "severity": "Moderate",
-        "treatment_recommendations": ["Apply Tricyclazole 75% WP"],
+        "primary_diagnosis": "Paddy Blast",
+        "confidence": 0.95,
+        "secondary_matches": [
+          {
+            "label": "Brown Spot",
+            "confidence": 0.42,
+            "source": "disease"
+          }
+        ],
         "status": "reviewed",
+        "severity": "Normal",
         "identity_redacted": true
       }
     ],
     "page": 1,
     "page_size": 25,
-    "total": 1,
+    "total": 12,
+    "summary_metrics": {
+      "total_diagnoses": 12,
+      "diagnoses_by_crop": {
+        "Paddy": 7,
+        "Cotton": 3,
+        "Tomato": 2
+      },
+      "diagnoses_by_disease": {
+        "Paddy Blast": 5,
+        "Cotton Bollworm": 3,
+        "Tomato Early Blight": 2,
+        "Brown Spot": 2
+      },
+      "confidence_buckets": {
+        "high_confidence_ge_80": 9,
+        "medium_confidence_50_to_79": 3,
+        "low_confidence_lt_50": 0
+      }
+    },
     "privacy_note": "Diagnostic records are presented with farmer identity minimized."
   }
   ```

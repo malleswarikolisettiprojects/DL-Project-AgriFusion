@@ -877,6 +877,7 @@ async def get_admin_diagnostics(
             "page": page,
             "page_size": page_size,
             "total": data.get("total", 0),
+            "summary_metrics": data.get("summary_metrics", {}),
             "privacy_note": "Diagnostic records are presented with farmer identity minimized.",
         }
     except HTTPException:

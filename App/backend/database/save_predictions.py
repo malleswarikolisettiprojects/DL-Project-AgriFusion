@@ -294,6 +294,7 @@ def save_disease_prediction(data):
             print(f"Warning: Could not save disease prediction to prediction_records: {e}")
 
     # 2. Save to disease_prediction telemetry table (authenticated or anonymous)
+    telemetry_saved = False
     try:
         response = (
             supabase
@@ -313,7 +314,10 @@ def save_disease_prediction(data):
             })
             .execute()
         )
-        return response
+        if response and response.data:
+            telemetry_saved = True
+            print(f"Info: Successfully persisted disease prediction telemetry record for crop={data.get('crop')}")
+        return {"telemetry_saved": telemetry_saved, "response": response}
     except Exception as e:
         print(f"Warning: Could not save disease prediction to disease_prediction table: {e}")
-        return None
+        return {"telemetry_saved": False, "error": str(e)}

@@ -398,7 +398,7 @@ def get_all_diagnostics_for_admin(
     search: Optional[str] = None,
     review_status: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Fetch paginated diagnostic reports across all farmers with filters for administrative review (non-PII)."""
+    """Fetch paginated diagnostic inference records across all farmers from single source of truth (disease_prediction) with full-cohort metrics (non-PII)."""
     page = max(1, page)
     page_size = min(max(1, page_size), 100)
     offset = (page - 1) * page_size
@@ -406,107 +406,148 @@ def get_all_diagnostics_for_admin(
     from App.backend.settings import SUPABASE_URL
     admin_supabase = _get_admin_supabase()
 
+    empty_metrics = {
+        "total_diagnoses": 0,
+        "diagnoses_by_crop": {},
+        "diagnoses_by_disease": {},
+        "confidence_buckets": {
+            "high_confidence_ge_80": 0,
+            "medium_confidence_50_to_79": 0,
+            "low_confidence_lt_50": 0,
+        },
+    }
+
     if SUPABASE_URL:
         if admin_supabase is None:
-            logger.error("Supabase configured but admin client unavailable for diagnostics read.")
+            logger.error("Supabase configured but admin client unavailable for disease_prediction read.")
             raise RuntimeError("Database query failed for admin diagnostics")
 
-        raw_items = []
-        total = 0
-        is_disease_pred_source = True
-
         try:
+            # 1. Build query for paginated items & total matching count
             query = admin_supabase.table("disease_prediction").select("*", count="exact")
-            if crop:
-                query = query.ilike("crop", f"%{crop}%")
-            effective_status = status or review_status
+            if crop and crop.strip():
+                query = query.ilike("crop", f"%{crop.strip()}%")
+            if state and state.strip():
+                query = query.ilike("state", f"%{state.strip()}%")
+            if district and district.strip():
+                query = query.ilike("district", f"%{district.strip()}%")
+            
+            effective_status = (status or review_status or "").strip()
             if effective_status:
                 query = query.eq("status", effective_status)
             if start_date:
                 query = query.gte("created_at", start_date)
             if end_date:
                 query = query.lte("created_at", end_date)
+            
+            if search and search.strip():
+                s_term = search.strip()
+                query = query.or_(f"crop.ilike.%{s_term}%,top_disease.ilike.%{s_term}%,state.ilike.%{s_term}%,district.ilike.%{s_term}%")
 
             res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
-            if res.data is not None:
-                raw_items = res.data or []
-                total = res.count if res.count is not None else len(raw_items)
+            if res.data is None:
+                logger.error("Supabase disease_prediction query returned None data")
+                raise RuntimeError("Database query failed for admin diagnostics")
 
-            # Fallback to diagnostic_reports if disease_prediction returns 0 rows and no specific filters applied
-            if total == 0 and not crop and not start_date and not end_date:
-                try:
-                    fallback_res = admin_supabase.table("diagnostic_reports").select("*", count="exact").order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
-                    if fallback_res.data and len(fallback_res.data) > 0:
-                        raw_items = fallback_res.data
-                        total = fallback_res.count if fallback_res.count is not None else len(raw_items)
-                        is_disease_pred_source = False
-                except Exception as fb_err:
-                    logger.debug("Fallback read on diagnostic_reports skipped: %s", fb_err)
+            raw_items = res.data or []
+            total = res.count if res.count is not None else len(raw_items)
 
+            # 2. Build item list with secondary_matches mapping (NO treatment_recommendations alias)
             items = []
             for r in raw_items:
-                if is_disease_pred_source and "top_disease" in r:
-                    diag_name = r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient") or "Diagnosed"
-                    conf_val = float(r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence") or 0.9)
-                    all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
-                    treatments = [d.get("label") for d in all_det if isinstance(d, dict) and d.get("label")]
-                    if not treatments:
-                        treatments = ["Consult local agronomist or KVK expert."]
-                    
-                    item_dict = {
-                        "id": str(r.get("id")),
-                        "created_at": r.get("created_at"),
-                        "crop": r.get("crop") or "Unknown",
-                        "state": r.get("state") or "Andhra Pradesh",
-                        "district": r.get("district") or "Visakhapatnam",
-                        "diagnosis": diag_name,
-                        "confidence": conf_val,
-                        "severity": "Normal",
-                        "treatment_recommendations": treatments,
-                        "status": r.get("status") or "reviewed",
-                        "identity_redacted": True,
-                    }
-                else:
-                    det = r.get("detection_results") if isinstance(r.get("detection_results"), dict) else {}
-                    treatments = det.get("treatment_recommendations") or det.get("recommendations") or []
-                    item_dict = {
-                        "id": str(r.get("id")),
-                        "created_at": r.get("created_at"),
-                        "crop": r.get("crop") or "Unknown",
-                        "state": r.get("state") or det.get("state") or "Andhra Pradesh",
-                        "district": r.get("district") or det.get("district") or "Visakhapatnam",
-                        "diagnosis": r.get("primary_diagnosis") or det.get("diagnosis") or "Healthy",
-                        "confidence": float(r.get("confidence") or det.get("confidence") or 0.0),
-                        "severity": det.get("severity") or "Normal",
-                        "treatment_recommendations": treatments,
-                        "status": r.get("status") or "reviewed",
-                        "identity_redacted": True,
-                    }
+                diag_name = r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient") or "Diagnosed"
+                conf_val = float(r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence") or 0.9)
+                all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
+                
+                sec_matches = []
+                if isinstance(all_det, list) and len(all_det) > 1:
+                    for d in all_det[1:]:
+                        if isinstance(d, dict):
+                            sec_matches.append({
+                                "label": d.get("label", "Unknown Match"),
+                                "confidence": float(d.get("confidence") or 0.0),
+                                "source": d.get("source", "disease"),
+                            })
+
+                item_dict = {
+                    "id": str(r.get("id")),
+                    "created_at": r.get("created_at"),
+                    "crop": r.get("crop") or "Unknown",
+                    "state": r.get("state") or "Andhra Pradesh",
+                    "district": r.get("district") or "Visakhapatnam",
+                    "primary_diagnosis": diag_name,
+                    "confidence": conf_val,
+                    "secondary_matches": sec_matches,
+                    "status": r.get("status") or "reviewed",
+                    "severity": r.get("severity") or "Normal",
+                    "identity_redacted": True,
+                }
                 items.append(item_dict)
 
-            # Apply in-memory state/district/search filters if needed
-            if state:
-                items = [i for i in items if i["state"].lower() == state.strip().lower()]
-            if district:
-                items = [i for i in items if i["district"].lower() == district.strip().lower()]
-            if search:
-                s_term = search.strip().lower()
-                items = [
-                    i for i in items
-                    if s_term in i["crop"].lower()
-                    or s_term in i["diagnosis"].lower()
-                    or s_term in i["state"].lower()
-                    or s_term in i["district"].lower()
-                    or s_term in i["id"].lower()
-                ]
+            # 3. Calculate aggregate summary metrics across FULL filtered cohort
+            stats_query = admin_supabase.table("disease_prediction").select("crop, top_disease, top_pest, top_nutrient, top_disease_confidence")
+            if crop and crop.strip(): stats_query = stats_query.ilike("crop", f"%{crop.strip()}%")
+            if state and state.strip(): stats_query = stats_query.ilike("state", f"%{state.strip()}%")
+            if district and district.strip(): stats_query = stats_query.ilike("district", f"%{district.strip()}%")
+            if effective_status: stats_query = stats_query.eq("status", effective_status)
+            if start_date: stats_query = stats_query.gte("created_at", start_date)
+            if end_date: stats_query = stats_query.lte("created_at", end_date)
+            if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
 
-            return {"items": items, "page": page, "page_size": page_size, "total": total}
+            stats_res = stats_query.execute()
+            stats_rows = stats_res.data or []
+
+            by_crop = {}
+            by_disease = {}
+            high_conf = 0
+            med_conf = 0
+            low_conf = 0
+
+            for sr in stats_rows:
+                c = sr.get("crop") or "Unknown"
+                by_crop[c] = by_crop.get(c, 0) + 1
+
+                d = sr.get("top_disease") or sr.get("top_pest") or sr.get("top_nutrient") or "Diagnosed"
+                by_disease[d] = by_disease.get(d, 0) + 1
+
+                conf = float(sr.get("top_disease_confidence") or 0.0)
+                if conf >= 0.80:
+                    high_conf += 1
+                elif conf >= 0.50:
+                    med_conf += 1
+                else:
+                    low_conf += 1
+
+            summary_metrics = {
+                "total_diagnoses": total,
+                "diagnoses_by_crop": by_crop,
+                "diagnoses_by_disease": by_disease,
+                "confidence_buckets": {
+                    "high_confidence_ge_80": high_conf,
+                    "medium_confidence_50_to_79": med_conf,
+                    "low_confidence_lt_50": low_conf,
+                },
+            }
+
+            return {
+                "items": items,
+                "page": page,
+                "page_size": page_size,
+                "total": total,
+                "summary_metrics": summary_metrics,
+            }
         except Exception as exc:
-            logger.error("Supabase diagnostics read failure: %s", exc)
+            logger.error("Supabase disease_prediction read failure: %s", exc)
             raise RuntimeError("Database query failed for admin diagnostics") from exc
     else:
         # Standalone testing mode without SUPABASE_URL configured
-        return {"items": [], "page": page, "page_size": page_size, "total": 0}
+        return {
+            "items": [],
+            "page": page,
+            "page_size": page_size,
+            "total": 0,
+            "summary_metrics": empty_metrics,
+        }
 
 
 # -----------------------------------------------------------------------------

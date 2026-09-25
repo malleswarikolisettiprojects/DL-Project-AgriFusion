@@ -2,13 +2,14 @@
 AgriFusion — Unit & Integration Tests for Admin Diagnostics Audit & Disease Prediction Persistence
 ===============================================================================================
 Tests:
-  1. Authenticated disease prediction passes user_id and persists to diagnostic_reports.
+  1. Authenticated disease prediction passes user_id and persists to diagnostic_reports & disease_prediction.
   2. Anonymous disease prediction handles user_id=None safely without NOT NULL crashes.
   3. Database insert failure in one table does not prevent other tables or API response.
   4. Admin GET /api/v1/admin/diagnostics fails closed with HTTP 500 on database read errors.
-  5. Valid empty table returns HTTP 200 with total: 0 and items: [].
-  6. Privacy restrictions: PII is minimized/redacted in administrative diagnostic reports.
-  7. Search, crop, and review_status filter support.
+  5. Valid empty table returns HTTP 200 with total: 0, items: [], and empty summary_metrics.
+  6. Privacy restrictions: PII is minimized/redacted (no emails, user IDs, raw images).
+  7. Secondary matches field mapping (label, confidence, source) - NO treatment_recommendations alias.
+  8. Full-cohort summary_metrics analytics across all matching stored records.
 """
 
 import io
@@ -56,7 +57,7 @@ def test_authenticated_disease_prediction_persists_user_id(monkeypatch):
 
     fake_result = {
         "top_detections": [{"label": "Paddy Blast", "confidence": 0.95, "source": "disease"}],
-        "secondary_detections": [],
+        "secondary_detections": [{"label": "Brown Spot", "confidence": 0.42, "source": "disease"}],
         "annotated_image_url": "https://storage.test/img.jpg",
         "custom_crop_notice": None,
     }
@@ -129,8 +130,8 @@ def test_isolated_table_insert_failure_resilience(monkeypatch):
         "top_disease": "Tomato Early Blight",
         "top_disease_confidence": 0.95,
     })
-    # Returns response object from disease_prediction table
     assert res is not None
+    assert isinstance(res, dict)
 
 
 def test_admin_diagnostics_fails_closed_on_db_error(monkeypatch):
@@ -152,10 +153,23 @@ def test_admin_diagnostics_valid_empty_table(monkeypatch):
     """Verify GET /api/v1/admin/diagnostics returns HTTP 200 with total: 0 on valid empty table."""
     app.dependency_overrides[require_admin] = mock_admin_user
 
+    empty_data = {
+        "items": [],
+        "page": 1,
+        "page_size": 25,
+        "total": 0,
+        "summary_metrics": {
+            "total_diagnoses": 0,
+            "diagnoses_by_crop": {},
+            "diagnoses_by_disease": {},
+            "confidence_buckets": {"high_confidence_ge_80": 0, "medium_confidence_50_to_79": 0, "low_confidence_lt_50": 0},
+        },
+    }
+
     monkeypatch.setattr("App.backend.settings.SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setattr(
         "App.backend.database.farmer_db.get_all_diagnostics_for_admin",
-        MagicMock(return_value={"items": [], "page": 1, "page_size": 25, "total": 0}),
+        MagicMock(return_value=empty_data),
     )
 
     res = client.get("/api/v1/admin/diagnostics")
@@ -163,11 +177,12 @@ def test_admin_diagnostics_valid_empty_table(monkeypatch):
     data = res.json()
     assert data["total"] == 0
     assert data["items"] == []
+    assert "summary_metrics" in data
     assert "privacy_note" in data
 
 
-def test_admin_diagnostics_search_and_privacy_redaction(monkeypatch):
-    """Verify admin diagnostics returns items with identity_redacted: True and supports search filter."""
+def test_secondary_matches_mapping_and_privacy_redaction(monkeypatch):
+    """Verify admin diagnostics maps secondary_matches correctly and redacts user PII."""
     app.dependency_overrides[require_admin] = mock_admin_user
 
     fake_items = [
@@ -177,18 +192,26 @@ def test_admin_diagnostics_search_and_privacy_redaction(monkeypatch):
             "crop": "Paddy",
             "state": "Andhra Pradesh",
             "district": "Visakhapatnam",
-            "diagnosis": "Paddy Blast",
+            "primary_diagnosis": "Paddy Blast",
             "confidence": 0.92,
+            "secondary_matches": [
+                {"label": "Brown Spot", "confidence": 0.45, "source": "disease"}
+            ],
             "severity": "Moderate",
-            "treatment_recommendations": ["Apply Tricyclazole 75% WP"],
             "status": "reviewed",
             "identity_redacted": True,
         }
     ]
+    metrics = {
+        "total_diagnoses": 1,
+        "diagnoses_by_crop": {"Paddy": 1},
+        "diagnoses_by_disease": {"Paddy Blast": 1},
+        "confidence_buckets": {"high_confidence_ge_80": 1, "medium_confidence_50_to_79": 0, "low_confidence_lt_50": 0},
+    }
     monkeypatch.setattr("App.backend.settings.SUPABASE_URL", "https://fake.supabase.co")
     monkeypatch.setattr(
         "App.backend.database.farmer_db.get_all_diagnostics_for_admin",
-        MagicMock(return_value={"items": fake_items, "page": 1, "page_size": 25, "total": 1}),
+        MagicMock(return_value={"items": fake_items, "page": 1, "page_size": 25, "total": 1, "summary_metrics": metrics}),
     )
 
     res = client.get("/api/v1/admin/diagnostics?search=Blast&crop=Paddy")
@@ -198,6 +221,10 @@ def test_admin_diagnostics_search_and_privacy_redaction(monkeypatch):
     assert len(data["items"]) == 1
     item = data["items"][0]
     assert item["identity_redacted"] is True
-    assert item["diagnosis"] == "Paddy Blast"
+    assert item["primary_diagnosis"] == "Paddy Blast"
+    assert "secondary_matches" in item
+    assert item["secondary_matches"][0]["label"] == "Brown Spot"
+    assert "treatment_recommendations" not in item
     assert "user_id" not in item
     assert "user_email" not in item
+    assert data["summary_metrics"]["diagnoses_by_crop"]["Paddy"] == 1
