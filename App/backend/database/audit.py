@@ -44,6 +44,17 @@ def init_audit_db():
     conn.close()
 
 
+def _get_admin_client():
+    try:
+        from App.backend.settings import create_supabase_admin_client
+        admin_c = create_supabase_admin_client()
+        if admin_c is not None:
+            return admin_c
+    except Exception:
+        pass
+    return supabase
+
+
 async def record_audit_event(
     admin_user_id: str,
     action: str,
@@ -59,10 +70,11 @@ async def record_audit_event(
     timestamp = datetime.now(timezone.utc).isoformat()
     metadata_json = json.dumps(safe_metadata or {})
 
-    # 1. Try Supabase
-    if supabase is not None:
+    # 1. Try Supabase via admin client
+    client = _get_admin_client()
+    if client is not None:
         try:
-            res = supabase.table("admin_audit_logs").insert({
+            res = client.table("admin_audit_logs").insert({
                 "admin_user_id": admin_user_id,
                 "action": action,
                 "target_type": target_type,
