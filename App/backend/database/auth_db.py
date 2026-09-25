@@ -601,16 +601,10 @@ def login_user(
 # ──────────────────────────────────────────────────────────────────────────────
 def verify_admin(username: str, password: str) -> bool:
     """
-    Verify admin credentials against environment variables only.
-    Returns False if ADMIN_USERNAME or ADMIN_PASSWORD are not configured.
-    Never falls back to any default credential.
+    Deprecated fallback admin check.
+    Always returns False to enforce Supabase Auth as the sole authentication source.
     """
-    if not ADMIN_USERNAME or not ADMIN_PASSWORD:
-        return False  # Admin login is disabled if env vars are absent
-    return (
-        username.strip() == ADMIN_USERNAME
-        and password == ADMIN_PASSWORD
-    )
+    return False
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -532,17 +532,39 @@ CREATE INDEX IF NOT EXISTS idx_farmer_feedback_user_id ON public.farmer_feedback
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_created_at ON public.farmer_feedback(created_at DESC);
 
 ALTER TABLE public.farmer_feedback ENABLE ROW LEVEL SECURITY;
+
 DROP POLICY IF EXISTS "Farmers insert own feedback" ON public.farmer_feedback;
-CREATE POLICY "Farmers insert own feedback" ON public.farmer_feedback FOR INSERT WITH CHECK (auth.role() = 'authenticated' OR auth.role() = 'anon' OR auth.role() = 'service_role' OR user_id IS NULL);
-
+DROP POLICY IF EXISTS "Allow feedback submission" ON public.farmer_feedback;
 DROP POLICY IF EXISTS "Farmers read own feedback" ON public.farmer_feedback;
-CREATE POLICY "Farmers read own feedback" ON public.farmer_feedback FOR SELECT USING (auth.uid() = user_id);
-
 DROP POLICY IF EXISTS "Admins select farmer feedback" ON public.farmer_feedback;
-CREATE POLICY "Admins select farmer feedback" ON public.farmer_feedback FOR SELECT USING (auth.role() = 'service_role' OR EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin', 'super_admin')));
-
 DROP POLICY IF EXISTS "Admins update farmer feedback" ON public.farmer_feedback;
-CREATE POLICY "Admins update farmer feedback" ON public.farmer_feedback FOR UPDATE USING (auth.role() = 'service_role' OR EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin', 'super_admin')));
+DROP POLICY IF EXISTS "Admins delete farmer feedback" ON public.farmer_feedback;
+DROP POLICY IF EXISTS "Allow anon select" ON public.farmer_feedback;
+DROP POLICY IF EXISTS "Allow anon update" ON public.farmer_feedback;
+DROP POLICY IF EXISTS "Allow anon delete" ON public.farmer_feedback;
+DROP POLICY IF EXISTS "Allow public select" ON public.farmer_feedback;
+DROP POLICY IF EXISTS "Allow public access" ON public.farmer_feedback;
+
+-- 1. Allow feedback submission (INSERT)
+CREATE POLICY "Allow feedback submission" ON public.farmer_feedback FOR INSERT WITH CHECK (true);
+
+-- 2. Restrict SELECT to farmer's own user_id or service_role/verified admins
+CREATE POLICY "Farmers read own feedback" ON public.farmer_feedback FOR SELECT USING (
+  (auth.uid() IS NOT NULL AND auth.uid() = user_id) OR
+  auth.role() = 'service_role' OR
+  EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin', 'super_admin'))
+);
+
+-- 3. Restrict UPDATE and DELETE strictly to service_role or verified admins
+CREATE POLICY "Admins update farmer feedback" ON public.farmer_feedback FOR UPDATE USING (
+  auth.role() = 'service_role' OR
+  EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin', 'super_admin'))
+);
+
+CREATE POLICY "Admins delete farmer feedback" ON public.farmer_feedback FOR DELETE USING (
+  auth.role() = 'service_role' OR
+  EXISTS (SELECT 1 FROM public.profiles WHERE profiles.id = auth.uid() AND profiles.role IN ('admin', 'super_admin'))
+);
 
 -- -----------------------------------------------------------------------------
 -- 11b. Feedback Review Notes Table (Admin Audit Notes)
