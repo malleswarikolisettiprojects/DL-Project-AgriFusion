@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _supabase = None
 
+
 def _get_supabase():
     global _supabase
     if _supabase is None:
@@ -34,6 +35,26 @@ def _get_supabase():
     return _supabase
 
 
+def _get_admin_client():
+    """Returns server-only privileged Supabase admin client."""
+    try:
+        from App.backend.settings import create_supabase_admin_client
+        admin_c = create_supabase_admin_client()
+        if admin_c is not None:
+            return admin_c
+    except Exception:
+        pass
+    return _get_supabase()
+
+
+def _is_supabase_active() -> bool:
+    try:
+        from App.backend.settings import SUPABASE_URL, SUPABASE_KEY
+        return bool(SUPABASE_URL and SUPABASE_KEY)
+    except Exception:
+        return False
+
+
 def _get_db_connection():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -41,12 +62,13 @@ def _get_db_connection():
 
 
 def init_feedback_db():
-    """Create farmer_feedback and feedback_review_notes tables if missing."""
+    """Create farmer_feedback and feedback_review_notes tables in local SQLite for dev/test mode."""
     conn = _get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS farmer_feedback (
             id                    TEXT PRIMARY KEY,
+            user_id               TEXT,
             advisory_id           TEXT,
             created_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -54,7 +76,7 @@ def init_feedback_db():
             category              TEXT NOT NULL,
             message               TEXT NOT NULL,
             language              TEXT DEFAULT 'English',
-            status                TEXT DEFAULT 'new',
+            status                TEXT DEFAULT 'pending_review',
             priority              TEXT DEFAULT 'normal',
             assigned_to           TEXT,
             admin_note_count      INTEGER DEFAULT 0,
@@ -62,7 +84,6 @@ def init_feedback_db():
             resolved_by_admin_id  TEXT
         )
     """)
-    # Migration: add assigned_to if missing
     cursor.execute("PRAGMA table_info(farmer_feedback)")
     cols = [col["name"] for col in cursor.fetchall()]
     if "assigned_to" not in cols:
@@ -70,10 +91,15 @@ def init_feedback_db():
             cursor.execute("ALTER TABLE farmer_feedback ADD COLUMN assigned_to TEXT")
         except Exception:
             pass
+    if "user_id" not in cols:
+        try:
+            cursor.execute("ALTER TABLE farmer_feedback ADD COLUMN user_id TEXT")
+        except Exception:
+            pass
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS feedback_review_notes (
-            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            id            TEXT PRIMARY KEY,
             feedback_id   TEXT NOT NULL,
             admin_user_id TEXT NOT NULL,
             note          TEXT NOT NULL,
@@ -97,16 +123,16 @@ def create_farmer_feedback(
     message: str,
     advisory_id: Optional[str] = None,
     language: Optional[str] = "English",
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Store new farmer feedback record."""
-    init_feedback_db()
-
-    feedback_id = f"fb-{uuid.uuid4().hex[:12]}"
+    feedback_id = str(uuid.uuid4())
     created_at = datetime.now(timezone.utc).isoformat()
     clean_msg = sanitize_text(message)
 
     record = {
         "id": feedback_id,
+        "user_id": user_id,
         "advisory_id": advisory_id,
         "created_at": created_at,
         "updated_at": created_at,
@@ -114,30 +140,42 @@ def create_farmer_feedback(
         "category": category,
         "message": clean_msg,
         "language": language or "English",
-        "status": "new",
+        "status": "pending_review",
         "priority": "normal",
         "admin_note_count": 0,
         "resolved_at": None,
         "resolved_by_admin_id": None,
     }
 
-    supabase = _get_supabase()
-    if supabase is not None:
+    if _is_supabase_active():
+        client = _get_admin_client()
+        if client is None:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackInsertError:{corr_id}] Supabase active but client unavailable")
+            raise RuntimeError(f"Database write failure (Ref: {corr_id})")
         try:
-            supabase.table("farmer_feedback").insert(record).execute()
-            return record
-        except Exception:
-            pass
+            res = client.table("farmer_feedback").insert(record).execute()
+            if res.data:
+                return record
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackInsertError:{corr_id}] Supabase insert returned empty data")
+            raise RuntimeError(f"Database write failure (Ref: {corr_id})")
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackInsertError:{corr_id}] Failed to insert farmer feedback into Supabase: {err}")
+            raise RuntimeError(f"Database write failure (Ref: {corr_id}): {err}") from err
 
+    # SQLite fallback ONLY when Supabase is not configured (local dev/test)
+    init_feedback_db()
     conn = _get_db_connection()
     cursor = conn.cursor()
     cursor.execute("""
         INSERT INTO farmer_feedback (
-            id, advisory_id, created_at, updated_at, rating, category, message,
+            id, user_id, advisory_id, created_at, updated_at, rating, category, message,
             language, status, priority, admin_note_count, resolved_at, resolved_by_admin_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
-        record["id"], record["advisory_id"], record["created_at"], record["updated_at"],
+        record["id"], record["user_id"], record["advisory_id"], record["created_at"], record["updated_at"],
         record["rating"], record["category"], record["message"], record["language"],
         record["status"], record["priority"], record["admin_note_count"],
         record["resolved_at"], record["resolved_by_admin_id"]
@@ -160,15 +198,18 @@ def fetch_farmer_feedback_list(
     end_date: Optional[str] = None,
     search: Optional[str] = None,
 ) -> dict:
-    """Fetch paginated farmer feedback list and calculated rating distribution."""
-    init_feedback_db()
+    """Fetch paginated farmer feedback list and calculated rating distribution using privileged admin client."""
     offset = (page - 1) * page_size
-
     rows_data = []
-    supabase = _get_supabase()
-    if supabase is not None:
+
+    if _is_supabase_active():
+        client = _get_admin_client()
+        if client is None:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackFetchError:{corr_id}] Supabase active but admin client unavailable")
+            raise RuntimeError(f"Database query failure (Ref: {corr_id})")
         try:
-            q = supabase.table("farmer_feedback").select("*").order("created_at", desc=True)
+            q = client.table("farmer_feedback").select("*").order("created_at", desc=True)
             if status:
                 q = q.eq("status", status)
             if category:
@@ -179,13 +220,20 @@ def fetch_farmer_feedback_list(
                 q = q.eq("rating", rating)
             if assigned_to:
                 q = q.eq("assigned_to", assigned_to)
-            res = q.execute()
-            if res.data:
-                rows_data = res.data
-        except Exception:
-            rows_data = []
+            if start_date:
+                q = q.gte("created_at", start_date)
+            if end_date:
+                q = q.lte("created_at", end_date)
 
-    if not rows_data:
+            res = q.execute()
+            rows_data = res.data if res.data is not None else []
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackFetchError:{corr_id}] Supabase query failed: {err}")
+            raise RuntimeError(f"Database query failure (Ref: {corr_id}): {err}") from err
+    else:
+        # SQLite fallback for local dev / test
+        init_feedback_db()
         try:
             conn = _get_db_connection()
             cursor = conn.cursor()
@@ -212,19 +260,22 @@ def fetch_farmer_feedback_list(
             rows = cursor.fetchall()
             rows_data = [dict(r) for r in rows]
             conn.close()
-        except Exception:
-            rows_data = []
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackFetchError:{corr_id}] Local SQLite query failed: {err}")
+            raise RuntimeError(f"Database query failure (Ref: {corr_id}): {err}") from err
 
     filtered = []
     for r in rows_data:
-        if start_date and (r.get("created_at") or "") < start_date:
+        c_at = str(r.get("created_at") or "")
+        if start_date and c_at < start_date:
             continue
-        if end_date and (r.get("created_at") or "") > end_date:
+        if end_date and c_at > end_date:
             continue
         if search:
             s_lower = search.lower()
-            msg = (r.get("message") or "").lower()
-            cat = (r.get("category") or "").lower()
+            msg = str(r.get("message") or "").lower()
+            cat = str(r.get("category") or "").lower()
             if s_lower not in msg and s_lower not in cat:
                 continue
         filtered.append(r)
@@ -248,7 +299,7 @@ def fetch_farmer_feedback_list(
             "category": r.get("category"),
             "message": r.get("message"),
             "language": r.get("language") or "English",
-            "status": r.get("status") or "new",
+            "status": r.get("status") or "pending_review",
             "priority": r.get("priority") or "normal",
             "assigned_to": r.get("assigned_to"),
             "admin_note_count": r.get("admin_note_count") or 0,
@@ -269,45 +320,64 @@ def fetch_farmer_feedback_list(
     }
 
 
-def get_farmer_feedback_detail(feedback_id: str) -> Optional[Dict[str, Any]]:
-    """Fetch single farmer feedback record with notes and compliance info if present."""
-    init_feedback_db()
-    r = None
+def _is_valid_uuid(val: Any) -> bool:
+    if not val:
+        return False
+    try:
+        uuid.UUID(str(val))
+        return True
+    except (ValueError, TypeError, AttributeError):
+        return False
 
-    supabase = _get_supabase()
-    if supabase is not None:
+
+def get_farmer_feedback_detail(feedback_id: str) -> Optional[Dict[str, Any]]:
+    """Fetch single farmer feedback record with review notes using privileged admin client."""
+    r = None
+    notes = []
+
+    if _is_supabase_active():
+        if not _is_valid_uuid(feedback_id):
+            return None
+        client = _get_admin_client()
+        if client is None:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackDetailError:{corr_id}] Supabase active but admin client unavailable")
+            raise RuntimeError(f"Database query failure (Ref: {corr_id})")
         try:
-            res = supabase.table("farmer_feedback").select("*").eq("id", feedback_id).execute()
+            res = client.table("farmer_feedback").select("*").eq("id", feedback_id).execute()
             if res.data:
                 r = res.data[0]
-        except Exception:
-            pass
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackDetailError:{corr_id}] Supabase fetch feedback failed: {err}")
+            raise RuntimeError(f"Database query failure (Ref: {corr_id}): {err}") from err
 
-    if not r:
+        if r:
+            try:
+                res_n = client.table("feedback_review_notes").select("*").eq("feedback_id", feedback_id).order("created_at", desc=False).execute()
+                notes = res_n.data if res_n.data is not None else []
+            except Exception:
+                notes = []
+    else:
+        init_feedback_db()
         try:
             conn = _get_db_connection()
             cursor = conn.cursor()
             cursor.execute("SELECT * FROM farmer_feedback WHERE id = ?", (feedback_id,))
             row = cursor.fetchone()
-            conn.close()
             if row:
                 r = dict(row)
-        except Exception:
-            pass
+                cursor.execute("SELECT id, feedback_id, admin_user_id, note, created_at FROM feedback_review_notes WHERE feedback_id = ? ORDER BY created_at ASC", (feedback_id,))
+                rows_n = cursor.fetchall()
+                notes = [dict(n) for n in rows_n]
+            conn.close()
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackDetailError:{corr_id}] SQLite fetch feedback failed: {err}")
+            raise RuntimeError(f"Database query failure (Ref: {corr_id}): {err}") from err
 
     if not r:
         return None
-
-    notes = []
-    try:
-        conn = _get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, feedback_id, admin_user_id, note, created_at FROM feedback_review_notes WHERE feedback_id = ? ORDER BY created_at ASC", (feedback_id,))
-        rows = cursor.fetchall()
-        notes = [dict(n) for n in rows]
-        conn.close()
-    except Exception:
-        notes = []
 
     agronomic_review = {
         "source_citations_present": True,
@@ -328,7 +398,7 @@ def get_farmer_feedback_detail(feedback_id: str) -> Optional[Dict[str, Any]]:
         "category": r.get("category"),
         "message": r.get("message"),
         "language": r.get("language") or "English",
-        "status": r.get("status") or "new",
+        "status": r.get("status") or "pending_review",
         "priority": r.get("priority") or "normal",
         "assigned_to": r.get("assigned_to"),
         "admin_note_count": len(notes),
@@ -376,25 +446,34 @@ def update_farmer_feedback_record(
         "resolved_by_admin_id": resolved_by_admin_id,
     }
 
-    supabase = _get_supabase()
-    if supabase is not None:
+    if _is_supabase_active():
+        client = _get_admin_client()
+        if client is None:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackUpdateError:{corr_id}] Supabase active but admin client unavailable")
+            raise RuntimeError(f"Database update failure (Ref: {corr_id})")
         try:
-            supabase.table("farmer_feedback").update(updates).eq("id", feedback_id).execute()
-        except Exception:
-            pass
-
-    try:
-        conn = _get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("""
-            UPDATE farmer_feedback
-            SET status = ?, priority = ?, assigned_to = ?, updated_at = ?, resolved_at = ?, resolved_by_admin_id = ?
-            WHERE id = ?
-        """, (new_status, new_priority, new_assigned_to, now_iso, resolved_at, resolved_by_admin_id, feedback_id))
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass
+            client.table("farmer_feedback").update(updates).eq("id", feedback_id).execute()
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackUpdateError:{corr_id}] Supabase update failed: {err}")
+            raise RuntimeError(f"Database update failure (Ref: {corr_id}): {err}") from err
+    else:
+        init_feedback_db()
+        try:
+            conn = _get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE farmer_feedback
+                SET status = ?, priority = ?, assigned_to = ?, updated_at = ?, resolved_at = ?, resolved_by_admin_id = ?
+                WHERE id = ?
+            """, (new_status, new_priority, new_assigned_to, now_iso, resolved_at, resolved_by_admin_id, feedback_id))
+            conn.commit()
+            conn.close()
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackUpdateError:{corr_id}] SQLite update failed: {err}")
+            raise RuntimeError(f"Database update failure (Ref: {corr_id}): {err}") from err
 
     return {
         "id": feedback_id,
@@ -415,22 +494,54 @@ def add_feedback_review_note(feedback_id: str, admin_user_id: str, note: str) ->
 
     clean_note = sanitize_text(note)
     created_at = datetime.now(timezone.utc).isoformat()
+    note_id = str(uuid.uuid4())
 
-    conn = _get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        INSERT INTO feedback_review_notes (feedback_id, admin_user_id, note, created_at)
-        VALUES (?, ?, ?, ?)
-    """, (feedback_id, admin_user_id, clean_note, created_at))
-    note_id = cursor.lastrowid
+    note_record = {
+        "id": note_id,
+        "feedback_id": feedback_id,
+        "admin_user_id": admin_user_id,
+        "note": clean_note,
+        "created_at": created_at,
+    }
 
-    cursor.execute("UPDATE farmer_feedback SET admin_note_count = admin_note_count + 1, updated_at = ? WHERE id = ?", (created_at, feedback_id))
-    conn.commit()
-    conn.close()
+    if _is_supabase_active():
+        client = _get_admin_client()
+        if client is None:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackNoteError:{corr_id}] Supabase active but admin client unavailable")
+            raise RuntimeError(f"Database insert failure (Ref: {corr_id})")
+        try:
+            client.table("feedback_review_notes").insert(note_record).execute()
+            new_count = (existing.get("admin_note_count") or 0) + 1
+            client.table("farmer_feedback").update({
+                "admin_note_count": new_count,
+                "updated_at": created_at,
+            }).eq("id", feedback_id).execute()
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackNoteError:{corr_id}] Supabase insert note failed: {err}")
+            raise RuntimeError(f"Database insert failure (Ref: {corr_id}): {err}") from err
+    else:
+        init_feedback_db()
+        try:
+            conn = _get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO feedback_review_notes (id, feedback_id, admin_user_id, note, created_at)
+                VALUES (?, ?, ?, ?, ?)
+            """, (note_id, feedback_id, admin_user_id, clean_note, created_at))
+            cursor.execute("UPDATE farmer_feedback SET admin_note_count = admin_note_count + 1, updated_at = ? WHERE id = ?", (created_at, feedback_id))
+            conn.commit()
+            conn.close()
+        except Exception as err:
+            corr_id = uuid.uuid4().hex[:8]
+            logger.error(f"[FeedbackNoteError:{corr_id}] SQLite insert note failed: {err}")
+            raise RuntimeError(f"Database insert failure (Ref: {corr_id}): {err}") from err
 
     return {
-        "id": str(note_id),
+        "id": note_id,
         "feedback_id": feedback_id,
         "note": clean_note,
         "created_at": created_at,
     }
+

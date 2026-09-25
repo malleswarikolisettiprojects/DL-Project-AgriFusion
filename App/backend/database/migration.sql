@@ -514,6 +514,7 @@ CREATE TABLE IF NOT EXISTS public.farmer_feedback (
     language TEXT DEFAULT 'English',
     status TEXT NOT NULL DEFAULT 'pending_review',
     priority TEXT NOT NULL DEFAULT 'normal',
+    assigned_to TEXT,
     admin_note_count INTEGER DEFAULT 0,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -521,16 +522,44 @@ CREATE TABLE IF NOT EXISTS public.farmer_feedback (
     resolved_by_admin_id UUID REFERENCES auth.users(id) ON DELETE SET NULL
 );
 
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS assigned_to TEXT;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS prediction_id UUID;
+ALTER TABLE public.farmer_feedback ADD COLUMN IF NOT EXISTS admin_note_count INTEGER DEFAULT 0;
+
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_status ON public.farmer_feedback(status);
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_user_id ON public.farmer_feedback(user_id);
 CREATE INDEX IF NOT EXISTS idx_farmer_feedback_created_at ON public.farmer_feedback(created_at DESC);
 
 ALTER TABLE public.farmer_feedback ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS "Farmers insert own feedback" ON public.farmer_feedback;
-CREATE POLICY "Farmers insert own feedback" ON public.farmer_feedback FOR INSERT WITH CHECK (auth.uid() = user_id OR user_id IS NULL);
+CREATE POLICY "Farmers insert own feedback" ON public.farmer_feedback FOR INSERT WITH CHECK (auth.role() = 'authenticated' OR auth.role() = 'anon' OR auth.role() = 'service_role' OR user_id IS NULL);
 
 DROP POLICY IF EXISTS "Farmers read own feedback" ON public.farmer_feedback;
 CREATE POLICY "Farmers read own feedback" ON public.farmer_feedback FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Admins select farmer feedback" ON public.farmer_feedback;
+CREATE POLICY "Admins select farmer feedback" ON public.farmer_feedback FOR SELECT USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin');
+
+DROP POLICY IF EXISTS "Admins update farmer feedback" ON public.farmer_feedback;
+CREATE POLICY "Admins update farmer feedback" ON public.farmer_feedback FOR UPDATE USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin');
+
+-- -----------------------------------------------------------------------------
+-- 11b. Feedback Review Notes Table (Admin Audit Notes)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS public.feedback_review_notes (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    feedback_id UUID NOT NULL REFERENCES public.farmer_feedback(id) ON DELETE CASCADE,
+    admin_user_id UUID REFERENCES auth.users(id) ON DELETE SET NULL,
+    note TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_feedback_review_notes_feedback_id ON public.feedback_review_notes(feedback_id);
+
+ALTER TABLE public.feedback_review_notes ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "Admins manage feedback notes" ON public.feedback_review_notes;
+CREATE POLICY "Admins manage feedback notes" ON public.feedback_review_notes FOR ALL USING (auth.role() = 'service_role' OR auth.jwt()->>'role' = 'admin');
 
 -- -----------------------------------------------------------------------------
 -- 12. Advisory Activity & Notes Tables (Agronomic Telemetry & Admin Audit)

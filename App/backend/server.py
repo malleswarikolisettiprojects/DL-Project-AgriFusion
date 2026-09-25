@@ -1030,18 +1030,23 @@ async def api_agent_query(req: AgentQueryRequest):
 
 # 6c. Farmer Advisory Feedback Submission API
 @app.post("/api/v1/feedback")
-def api_submit_feedback(req: CreateFeedbackRequest):
+def api_submit_feedback(
+    req: CreateFeedbackRequest,
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
     """
     Farmer Feedback Submission Endpoint.
     Stores farmer feedback securely without exposing sensitive personal data.
     """
     try:
+        user_id = current_user.id if current_user else None
         record = create_farmer_feedback(
             rating=req.rating,
             category=req.category,
             message=req.message,
             advisory_id=req.advisory_id,
             language=req.language,
+            user_id=user_id,
         )
         return {
             "success": True,
