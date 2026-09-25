@@ -187,7 +187,7 @@ def _load_cached_doc(doc_id: str) -> Optional[str]:
 # DOCUMENT FETCHER
 # ============================================================
 
-def _fetch_url_text(url: str, timeout: int = 12) -> Optional[str]:
+def _fetch_url_text(url: str, timeout: int = 2) -> Optional[str]:
     """Fetch a URL and extract clean readable text using BeautifulSoup."""
     if not REQUESTS_OK or not BS4_OK:
         return None
