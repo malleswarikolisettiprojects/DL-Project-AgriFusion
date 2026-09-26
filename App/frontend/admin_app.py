@@ -646,7 +646,8 @@ elif menu == "🔬 Crop Diagnostics Audit":
             if items:
                 for diag in items:
                     outcome = diag.get("inference_outcome")
-                    exec_stat = diag.get("execution_status") or "success"
+                    # Do NOT substitute a default: None means this row pre-dates telemetry columns.
+                    exec_stat = diag.get("execution_status")  # May be None for legacy rows
 
                     if diag.get("primary_diagnosis"):
                         diag_title = diag.get("primary_diagnosis")
@@ -662,11 +663,13 @@ elif menu == "🔬 Crop Diagnostics Audit":
                     conf = diag.get("confidence")
                     conf_str = f"{round(conf * 100, 1)}% confidence" if conf is not None else "Confidence N/A"
                     badge_outcome = outcome.upper() if outcome else "UNSPECIFIED"
-                    expander_header = f"🔬 {diag_title} on {diag.get('crop')} ({conf_str}) — Outcome: `{badge_outcome}` [{exec_stat}]"
+                    exec_stat_display = exec_stat if exec_stat is not None else "Not recorded"
+                    expander_header = f"🔬 {diag_title} on {diag.get('crop')} ({conf_str}) — Outcome: `{badge_outcome}` [{exec_stat_display}]"
 
                     with st.expander(expander_header):
                         st.write(f"**Report ID:** `{diag.get('id')}` | **Request ID:** `{diag.get('request_id') or 'N/A'}` | **Date:** `{diag.get('created_at')}`")
-                        st.write(f"**Inference Outcome:** `{outcome}` | **Execution Status:** `{exec_stat}` | **Review Status:** `{diag.get('status') or 'pending_review'}`")
+                        exec_stat_display = exec_stat if exec_stat is not None else "Not recorded"
+                        st.write(f"**Inference Outcome:** `{outcome}` | **Execution Status:** `{exec_stat_display}` | **Review Status:** `{diag.get('status') or 'pending_review'}`")
                         st.write(f"**Location:** {diag.get('district') or 'N/A'}, {diag.get('state') or 'N/A'} | **Actor Ref:** `{diag.get('actor_ref') or 'Anonymous'}`")
 
                         col_prov, col_cand = st.columns(2)

@@ -305,6 +305,7 @@ def health():
         "status": "ok",
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "supabase_connected": supabase is not None,
+        "deployed_commit": os.environ.get("RENDER_GIT_COMMIT", "unknown"),
     }
 
 

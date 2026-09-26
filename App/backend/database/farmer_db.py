@@ -511,8 +511,13 @@ def get_all_diagnostics_for_admin(
             items = []
             for r in raw_items:
                 all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
+                # None when the migration hasn't been applied yet (pre-migration schema path).
+                # For rows written after migration: preserve the stored value exactly.
+                # NULL stored value on a post-migration row means the field was not recorded —
+                # return None rather than fabricating "success" for rows that pre-date telemetry.
                 outcome = r.get("inference_outcome") if _has_telemetry_cols else None
-                exec_stat = (r.get("execution_status") or "success") if _has_telemetry_cols else "success"
+                _raw_exec = r.get("execution_status") if _has_telemetry_cols else None
+                exec_stat = _raw_exec if _raw_exec is not None else None
 
                 # Keep diagnosis & confidence null for inconclusive, low_confidence, no_detection, or error outcomes
                 if outcome in ("no_detection", "low_confidence", "provider_error") or r.get("primary_diagnosis") is None:
