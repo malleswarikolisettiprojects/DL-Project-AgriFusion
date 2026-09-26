@@ -172,13 +172,8 @@ def init_sources_db():
                 "verification_status": "verified",
                 "verified_date": "2026-09-18",
                 "verified_by_admin_id": "system_admin",
-                "verification_notes": "Official Direct Benefit Transfer portal for ₹6000 annual income support.",
-                "last_indexed_at": datetime.now(timezone.utc).isoformat(),
-                "index_status": "indexed",
-                "is_active": 1,
-                "needs_review": 0,
                 "caveats": [],
-            },
+            }
         ]
 
         for s in seed_sources:
@@ -193,8 +188,8 @@ def init_sources_db():
                 s["id"], s["title"], s["organization"], s["source_type"], s["subject"], s["crop"],
                 json.dumps(s["state_relevance"]), s["official_url"], s["document_format"],
                 s["language"], s["verification_status"], s["verified_date"], s["verified_by_admin_id"],
-                s["verification_notes"], s["last_indexed_at"], s["index_status"], s["is_active"],
-                s["needs_review"], json.dumps(s["caveats"])
+                s.get("verification_notes", ""), s.get("last_indexed_at"), s.get("index_status", "indexed"), s.get("is_active", 1),
+                s.get("needs_review", 0), json.dumps(s.get("caveats", []))
             ))
         conn.commit()
     finally:
