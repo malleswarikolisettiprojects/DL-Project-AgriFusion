@@ -1,38 +1,71 @@
 # 🌾 AgriFusion — AI Precision Agriculture Platform
 
-AgriFusion is an AI-powered agricultural decision support system built for farmers and agricultural stakeholders in **Andhra Pradesh** and **Telangana**. It combines live satellite weather forecasts, soil data, machine learning models, deep learning plant diagnosis, and AI chat to provide clear, actionable farming guidance.
+AgriFusion is an AI-powered agricultural decision support system built for farmers and agricultural stakeholders in **Andhra Pradesh** and **Telangana**. It combines live satellite weather forecasts, soil data, machine learning models, multi-provider deep learning plant disease/pest visual inference, and RAG AI chat to provide clear, actionable farming guidance.
 
 🌐 **Live Application**: [agrifusion.ai.studio](https://agrifusion.ai.studio/#)
 
 ---
 
-## 📌 Features
+## 📌 Features & Capabilities
 
-1. 🌱 **Crop Recommendation**: Suggests suitable crops based on soil nutrients (N, P, K, pH), location, and climate data.
-2. 🌦️ **Climate Risk Assessment**: Uses live weather forecasts to alert farmers about heat stress, drought, and heavy rainfall risks.
-3. 💧 **Precision Irrigation**: Calculates daily water requirements ($ET_c$) using the FAO-56 method and gives pump operating hours and canal run times.
-4. 🌾 **Yield Prediction**: Estimates crop harvest yield in Tons per Hectare and Quintals per Hectare.
-5. 💰 **Market Price Prediction**: Forecasts market prices (₹/Quintal) on harvest dates and estimates expected revenue.
-6. 🔬 **Leaf Disease Diagnosis**: Identifies crop diseases from leaf photos using deep learning models and provides treatments.
-7. 🏛️ **Government Schemes**: Recommends eligible central and state government farming schemes (YSR Rythu Bharosa, Rythu Bandhu, PM-KISAN, PMFBY, Drip Subsidies).
-8. 🤖 **Agronomy AI Chatbot**: An AI assistant powered by Google Gemini that answers farming questions using verified agricultural documents.
-9. ⚡ **All-in-One Farm Pipeline**: Runs crop, climate, irrigation, yield, and market predictions together in one step.
-10. 📋 **Farm Records**: Saves farm predictions and historical data securely using Supabase.
+1. 🔬 **Multi-Provider Visual AI Disease & Pest Diagnosis**:
+   - Evaluates crop leaf photos using multi-provider models (Roboflow Universe, PyTorch local weights, HuggingFace).
+   - Classifies inference outcomes into 4 strict, non-ambiguous categories: `detected`, `no_detection`, `low_confidence`, and `provider_error`.
+   - Normalizes confidence scores to 0–1 scale and enforces applied confidence thresholds (25% for standard crops, 75% for custom crops).
+   - Preserves candidate labels without fabricating synthetic diagnoses or assuming unverified plant health.
+
+2. 🤖 **Agronomy RAG AI Advisory**:
+   - AI assistant powered by Google Gemini API and verified agricultural literature.
+   - Generates organic and chemical treatments, prevention guidelines, and regional agronomy advice.
+
+3. 🌦️ **Climate Risk Assessment**:
+   - Uses live weather forecasts to alert farmers about heat stress, drought, and heavy rainfall risks.
+
+4. 💧 **Precision Irrigation Engine**:
+   - Calculates daily water requirements ($ET_c$) using the FAO-56 Penman-Monteith method.
+   - Computes pump operating hours and canal run times tailored to soil texture and crop growth stage.
+
+5. 🌾 **Crop Yield Prediction**:
+   - Estimates harvest yield in Tons per Hectare and Quintals per Hectare using trained ML models.
+
+6. 💰 **Market Price Forecasting**:
+   - Forecasts market prices (₹/Quintal) on harvest dates and estimates expected revenue.
+
+7. 🌱 **Crop Recommendation**:
+   - Recommends suitable crops based on soil nutrients (N, P, K, pH), location, and climate data.
+
+8. 🏛️ **Government Schemes Matching**:
+   - Matches eligible central and state government farming schemes (YSR Rythu Bharosa, Rythu Bandhu, PM-KISAN, PMFBY, Drip Subsidies).
+
+9. 📊 **Machine Learning Research Notebooks**:
+   - Includes full Jupyter Notebooks in `Notebooks/` for Climate Risk, Irrigation, Market Price, and Yield estimation models.
+
+10. 📊 **Diagnostic Telemetry & Admin Activity Log**:
+    - Persists execution status, provider summaries, candidate summaries, request IDs, and safe actor references into Supabase PostgreSQL.
 
 ---
 
 ## 🏗️ System Architecture
 
 ```text
-User / Frontend (agrifusion.ai.studio)
-       │
-       ▼ (REST API Requests)
-FastAPI Backend Server (App/backend/server.py)
-       │
-       ├── 🧠 ML & Deep Learning Models (App/pickles & App/pt files)
-       ├── 📚 Agronomy RAG Engine (Google Gemini AI + Agronomy Documents)
-       ├── 🌐 External APIs (OpenMeteo Weather, ISRIC SoilGrids, OpenStreetMap)
-       └── 🐘 Supabase Database (User Data & Records)
+               User / Frontend Web Application
+                             │
+                             ▼ (REST API / HTTPS)
+               FastAPI Backend Server (App/backend/server.py)
+                             │
+      ┌──────────────────────┼──────────────────────┐
+      │                      │                      │
+      ▼                      ▼                      ▼
+Multi-Provider Visual AI   Agronomy RAG       Machine Learning
+Inference Engine           Advisory Engine    Predictive Subsystems
+- Roboflow Universe        - Google Gemini    - Yield Prediction (.pkl)
+- PyTorch Local (.pt)      - Verified Docs    - Market Forecasting (.pkl)
+- HuggingFace Models                          - FAO-56 Irrigation Engine
+                                              - Climate Risk Model
+                             │
+                             ▼
+               Supabase PostgreSQL Database
+         (Telemetry, User Records & Admin Logging)
 ```
 
 ---
@@ -40,36 +73,49 @@ FastAPI Backend Server (App/backend/server.py)
 ## 📁 Folder Structure
 
 ```text
-DL-Project streamlit/
+DL-Project-AgriFusion/
 ├── App/
 │   ├── backend/                  # FastAPI backend server & intelligence modules
-│   │   ├── server.py             # Main REST API server
+│   │   ├── admin/                # Admin API endpoints & audit logging
+│   │   ├── database/             # Supabase handlers & migration.sql schema
+│   │   ├── server.py             # Main FastAPI REST API server
+│   │   ├── disease_detection.py  # Multi-provider visual AI engine
+│   │   ├── agronomy_rag.py       # Gemini AI RAG advisory system
 │   │   ├── crop.py               # Crop recommendation logic
 │   │   ├── climate_risk.py       # Weather risk assessment
 │   │   ├── irrigation.py         # Precision irrigation calculator
 │   │   ├── yields.py             # Crop yield estimator
 │   │   ├── market.py             # Market price forecaster
-│   │   ├── disease_detection.py  # Plant disease detection
-│   │   ├── agronomy_rag.py       # Gemini AI RAG chatbot
 │   │   └── schemes.py            # Government scheme matcher
-│   ├── frontend/                 # Admin Streamlit app
-│   ├── pickles/                  # Trained machine learning models (.pkl)
+│   ├── frontend/                 # Admin Streamlit review dashboard
+│   ├── pickles/                  # Trained scikit-learn models (.pkl)
 │   └── pt files/                 # PyTorch leaf disease models (.pt)
-├── rag_sources/                  # Crop & scheme reference documents (.md)
-├── render.yaml                   # Render cloud deployment settings
+├── Notebooks/                    # Jupyter Notebooks for model training & research
+│   ├── climate_risk_NB.ipynb     # Climate Risk & Vulnerability model notebook
+│   ├── Irrigation_Model_NB.ipynb # FAO-56 Smart Irrigation model notebook
+│   ├── Market_prd.ipynb          # Commodity Market Price Forecasting notebook
+│   └── yield.ipynb               # Crop Yield Estimation notebook
+├── tests/                        # Automated unit & integration test suite
+│   ├── test_disease_detection.py # Multi-provider inference & outcome tests
+│   ├── test_admin_diagnostics_mapping.py # Admin contract & telemetry mapping tests
+│   ├── test_admin_auth.py        # JWT security & RBAC tests
+│   └── test_admin_diagnostics_monitoring.py # Database resilience & fallback tests
+├── render.yaml                   # Render cloud deployment specification
 ├── requirements.txt              # Required Python packages
+├── API_RESPONSE_CONTRACT.md      # OpenAPI data contract & response spec
 └── README.md                     # Main documentation
 ```
 
 ---
 
-## 🛠️ Technologies Used
+## 🛠️ Tech Stack
 
-- **Backend**: Python, FastAPI, Uvicorn
-- **Machine Learning & AI**: Scikit-Learn, PyTorch, Google Gemini API
-- **Database**: Supabase (PostgreSQL)
-- **External Data APIs**: OpenMeteo (Weather), ISRIC SoilGrids (Soil), OpenStreetMap (Location)
-- **Deployment**: Render (Backend), Google AI Studio (Frontend)
+- **Backend**: Python 3.10+, FastAPI, Uvicorn, Pydantic
+- **Machine Learning & Deep Learning**: Scikit-Learn, PyTorch, Ultralytics YOLO, HuggingFace Transformers, Google Gemini API
+- **Database & Storage**: Supabase PostgreSQL, Supabase Storage
+- **External Data APIs**: OpenMeteo Weather, ISRIC SoilGrids, OpenStreetMap, Roboflow Universe
+- **Testing**: PyTest, Starlette TestClient, AnyIO
+- **Deployment**: Render Cloud, Supabase
 
 ---
 
@@ -80,7 +126,7 @@ DL-Project streamlit/
 
 ### 2. Clone Repository & Setup Virtual Environment
 ```bash
-git clone https://github.com/your-username/DL-Project-AgriFusion.git
+git clone https://github.com/malleswarikolisettiprojects/DL-Project-AgriFusion.git
 cd DL-Project-AgriFusion
 
 # Create virtual environment
@@ -99,36 +145,47 @@ pip install -r requirements.txt
 ```
 
 ### 4. Configure Environment Variables
-Create a `.env` file in the project folder with your API credentials:
+Create a `.env` file in the root folder with your credentials:
 ```env
 SUPABASE_URL=your_supabase_url
 SUPABASE_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
 GEMINI_API_KEY=your_gemini_api_key
+ROBOFLOW_API_KEY=your_roboflow_api_key
+HF_TOKEN=your_huggingface_token
 FRONTEND_URL=https://agrifusion.ai.studio
 ```
 
-### 5. Start Backend Server
+### 5. Start FastAPI Backend Server
 ```bash
-uvicorn App.backend.server:app --reload
+uvicorn App.backend.server:app --reload --port 8000
 ```
 Open interactive API documentation in your browser:
 - **Swagger UI**: `http://localhost:8000/docs`
+- **ReDoc**: `http://localhost:8000/redoc`
+
+### 6. Run Test Suite
+```bash
+python -m pytest tests/ -v
+```
 
 ---
 
-## 🔌 API Endpoints Summary
+## 🔌 Core API Endpoints Summary
 
 | Endpoint | Method | Description |
 | :--- | :--- | :--- |
-| `/api/v1/predict/crop` | `POST` | Get top recommended crops for a given location and soil |
-| `/api/v1/predict/climate` | `POST` | Get climate risk levels and field protection advice |
-| `/api/v1/predict/irrigation` | `POST` | Calculate daily water requirements and pump run time |
+| `/api/v1/predict/disease` | `POST` | Upload crop leaf photo for multi-provider disease/pest visual inference |
+| `/api/v1/predict/crop` | `POST` | Get top recommended crops based on soil & climate |
+| `/api/v1/predict/climate` | `POST` | Assess climate risk levels and field protection advice |
+| `/api/v1/predict/irrigation` | `POST` | Calculate daily $ET_c$ water requirements & pump run times |
 | `/api/v1/predict/yield` | `POST` | Predict harvest yield in Tons/Ha and Quintals/Ha |
 | `/api/v1/predict/market` | `POST` | Forecast harvest date market prices and revenue |
-| `/api/v1/predict/disease` | `POST` | Upload leaf photo for disease diagnosis and remedies |
 | `/api/v1/schemes/recommend` | `POST` | Match eligible central and state government farming schemes |
-| `/api/v1/agronomy/chat` | `POST` | Ask farming and crop management questions to AI Chatbot |
-| `/api/v1/pipeline/run` | `POST` | Run 5-step integrated prediction pipeline in one request |
+| `/api/v1/agronomy/chat` | `POST` | Ask farming & crop management questions to Gemini AI Chatbot |
+| `/api/v1/pipeline/run` | `POST` | Execute 5-step integrated prediction pipeline in one request |
+| `/api/v1/admin/diagnostics` | `GET` | Retrieve paginated diagnostic telemetry reports for admin review |
+| `/health` | `GET` | Lightweight health check & deployed commit SHA |
 
 ---
 
