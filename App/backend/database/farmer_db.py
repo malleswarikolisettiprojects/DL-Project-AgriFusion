@@ -433,10 +433,12 @@ def get_all_diagnostics_for_admin(
                 query = query.ilike("state", f"%{state.strip()}%")
             if district and district.strip():
                 query = query.ilike("district", f"%{district.strip()}%")
-            
+
             effective_status = (status or review_status or "").strip()
             if effective_status:
                 query = query.eq("status", effective_status)
+            # Only apply new-column filters if they exist in the DB (we discover this on first error)
+            _has_telemetry_cols = True  # optimistic; flipped on 42703 error
             if inference_outcome and inference_outcome.strip():
                 query = query.eq("inference_outcome", inference_outcome.strip())
             if execution_status and execution_status.strip():
@@ -445,7 +447,7 @@ def get_all_diagnostics_for_admin(
                 query = query.gte("created_at", start_date)
             if end_date:
                 query = query.lte("created_at", end_date)
-            
+
             if search and search.strip():
                 s_term = search.strip()
                 query = query.or_(f"crop.ilike.%{s_term}%,top_disease.ilike.%{s_term}%,state.ilike.%{s_term}%,district.ilike.%{s_term}%")
@@ -462,21 +464,55 @@ def get_all_diagnostics_for_admin(
             if end_date: cnt_query = cnt_query.lte("created_at", end_date)
             if search and search.strip(): cnt_query = cnt_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
 
-            cnt_res = cnt_query.execute()
-            total = cnt_res.count if cnt_res.count is not None else 0
+            def _run_count_and_items(cnt_q, item_q, off, ps):
+                """Execute count + paginated items queries; returns (total, raw_items)."""
+                cr = cnt_q.execute()
+                total_ = cr.count if cr.count is not None else 0
+                if total_ == 0 or off >= total_:
+                    return total_, []
+                r = item_q.order("created_at", desc=True).range(off, off + ps - 1).execute()
+                return total_, r.data or []
 
-            if total == 0 or offset >= total:
-                raw_items = []
-            else:
-                res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
-                raw_items = res.data or []
+            try:
+                total, raw_items = _run_count_and_items(cnt_query, query, offset, page_size)
+            except Exception as exc_inner:
+                # Detect missing column (42703) — migration not applied yet; fall back to legacy columns
+                _err_str = str(exc_inner)
+                if "42703" in _err_str or "does not exist" in _err_str:
+                    logger.warning(
+                        "disease_prediction telemetry columns not found (migration pending); "
+                        "falling back to legacy column set: %s", exc_inner
+                    )
+                    _has_telemetry_cols = False
+                    # Rebuild queries without the new-column filters/selects
+                    legacy_cols = (
+                        "id, created_at, crop, state, district, status, severity, "
+                        "primary_diagnosis, confidence, top_disease, top_disease_confidence, "
+                        "top_pest, top_pest_confidence, top_nutrient, top_nutrient_confidence, "
+                        "all_detections, annotated_image_url, custom_crop_notice"
+                    )
+                    q2 = admin_supabase.table("disease_prediction").select(legacy_cols, count="exact")
+                    cq2 = admin_supabase.table("disease_prediction").select("id", count="exact")
+                    for q_obj in (q2, cq2):
+                        if crop and crop.strip(): q_obj = q_obj.ilike("crop", f"%{crop.strip()}%")
+                        if state and state.strip(): q_obj = q_obj.ilike("state", f"%{state.strip()}%")
+                        if district and district.strip(): q_obj = q_obj.ilike("district", f"%{district.strip()}%")
+                        if effective_status: q_obj = q_obj.eq("status", effective_status)
+                        if start_date: q_obj = q_obj.gte("created_at", start_date)
+                        if end_date: q_obj = q_obj.lte("created_at", end_date)
+                        if search and search.strip():
+                            s2 = search.strip()
+                            q_obj = q_obj.or_(f"crop.ilike.%{s2}%,top_disease.ilike.%{s2}%,state.ilike.%{s2}%,district.ilike.%{s2}%")
+                    total, raw_items = _run_count_and_items(cq2, q2, offset, page_size)
+                else:
+                    raise
 
             # 2. Build item list with secondary_matches mapping & new telemetry fields
             items = []
             for r in raw_items:
                 all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
-                outcome = r.get("inference_outcome")
-                exec_stat = r.get("execution_status") or "success"
+                outcome = r.get("inference_outcome") if _has_telemetry_cols else None
+                exec_stat = (r.get("execution_status") or "success") if _has_telemetry_cols else "success"
 
                 # Keep diagnosis & confidence null for inconclusive, low_confidence, no_detection, or error outcomes
                 if outcome in ("no_detection", "low_confidence", "provider_error") or r.get("primary_diagnosis") is None:
@@ -496,7 +532,7 @@ def get_all_diagnostics_for_admin(
                                 conf_raw = first_det.get("confidence")
 
                 conf_val = float(conf_raw) if conf_raw is not None else None
-                
+
                 sec_matches = []
                 if isinstance(all_det, list) and len(all_det) > 0:
                     for d in all_det:
@@ -524,10 +560,10 @@ def get_all_diagnostics_for_admin(
                     "severity": r.get("severity"),
                     "inference_outcome": outcome,
                     "execution_status": exec_stat,
-                    "providers_summary": r.get("providers_summary") or {},
-                    "candidate_summary": r.get("candidate_summary") or {},
-                    "request_id": r.get("request_id"),
-                    "actor_ref": r.get("actor_ref"),
+                    "providers_summary": r.get("providers_summary") or {} if _has_telemetry_cols else {},
+                    "candidate_summary": r.get("candidate_summary") or {} if _has_telemetry_cols else {},
+                    "request_id": r.get("request_id") if _has_telemetry_cols else None,
+                    "actor_ref": r.get("actor_ref") if _has_telemetry_cols else None,
                     "annotated_image_url": r.get("annotated_image_url"),
                     "custom_crop_notice": r.get("custom_crop_notice"),
                     "identity_redacted": True,
@@ -535,20 +571,29 @@ def get_all_diagnostics_for_admin(
                 items.append(item_dict)
 
             # 3. Calculate aggregate summary metrics across FULL filtered cohort
-            stats_query = admin_supabase.table("disease_prediction").select("crop, top_disease, top_pest, top_nutrient, top_disease_confidence, top_pest_confidence, top_nutrient_confidence, primary_diagnosis, confidence, inference_outcome")
+            _stats_cols = (
+                "crop, top_disease, top_pest, top_nutrient, top_disease_confidence, "
+                "top_pest_confidence, top_nutrient_confidence, primary_diagnosis, confidence"
+            )
+            if _has_telemetry_cols:
+                _stats_cols += ", inference_outcome"
+            stats_query = admin_supabase.table("disease_prediction").select(_stats_cols)
             if crop and crop.strip(): stats_query = stats_query.ilike("crop", f"%{crop.strip()}%")
             if state and state.strip(): stats_query = stats_query.ilike("state", f"%{state.strip()}%")
             if district and district.strip(): stats_query = stats_query.ilike("district", f"%{district.strip()}%")
             if effective_status: stats_query = stats_query.eq("status", effective_status)
-            if inference_outcome and inference_outcome.strip(): stats_query = stats_query.eq("inference_outcome", inference_outcome.strip())
-            if execution_status and execution_status.strip(): stats_query = stats_query.eq("execution_status", execution_status.strip())
+            if _has_telemetry_cols:
+                if inference_outcome and inference_outcome.strip(): stats_query = stats_query.eq("inference_outcome", inference_outcome.strip())
+                if execution_status and execution_status.strip(): stats_query = stats_query.eq("execution_status", execution_status.strip())
             if start_date: stats_query = stats_query.gte("created_at", start_date)
             if end_date: stats_query = stats_query.lte("created_at", end_date)
             if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
-            if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
 
-            stats_res = stats_query.execute()
-            stats_rows = stats_res.data or []
+            try:
+                stats_res = stats_query.execute()
+                stats_rows = stats_res.data or []
+            except Exception:
+                stats_rows = []
 
             by_crop = {}
             by_disease = {}

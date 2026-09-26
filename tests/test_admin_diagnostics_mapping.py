@@ -159,32 +159,29 @@ def test_get_all_diagnostics_for_admin_contract():
 
 def test_api_predict_disease_route_mapping(realistic_inference_result):
     """Verify POST /api/v1/predict/disease correctly maps predict_disease_and_pests() return values into save_disease_prediction."""
-    from App.backend.server import api_predict_disease
-    from unittest.mock import AsyncMock
-    import asyncio
+    from App.backend.server import app as fastapi_app
+    from starlette.testclient import TestClient
+    import io
 
-    mock_image = MagicMock()
-    mock_image.filename = "rice_leaf.jpg"
-    mock_image.content_type = "image/jpeg"
-    mock_image.read = AsyncMock(return_value=b"fake_bytes")
+    tc = TestClient(fastapi_app, raise_server_exceptions=True)
 
     with patch("App.backend.server.predict_disease_and_pests", return_value=realistic_inference_result), \
          patch("App.backend.server.save_disease_prediction") as mock_save:
-        
-        mock_save.return_value = {"telemetry_saved": True, "event_id": "evt-123"}
-        
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            response = loop.run_until_complete(
-                api_predict_disease(crop="Rice", image=mock_image, current_user=None)
-            )
-        finally:
-            loop.close()
 
-    assert response["success"] is True
-    assert response["result"]["primary_diagnosis"] == "Rice Blast"
-    assert response["result"]["top_confidence"] == 0.9421
+        mock_save.return_value = {"telemetry_saved": True, "event_id": "evt-123"}
+
+        fake_image = io.BytesIO(b"fake_bytes")
+        response = tc.post(
+            "/api/v1/predict/disease",
+            data={"crop": "Rice"},
+            files={"image": ("rice_leaf.jpg", fake_image, "image/jpeg")},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["success"] is True
+    assert body["result"]["primary_diagnosis"] == "Rice Blast"
+    assert body["result"]["top_confidence"] == 0.9421
 
     mock_save.assert_called_once()
     saved_data = mock_save.call_args[0][0]
@@ -209,6 +206,7 @@ def test_save_disease_prediction_persists_telemetry_fields():
     mock_admin_client = MagicMock()
     mock_table = MagicMock()
     mock_admin_client.table.return_value = mock_table
+    # Simulate a successful insert (no exception raised)
     mock_table.insert.return_value.execute.return_value = MagicMock(data=[{"id": "db-row-telemetry"}])
 
     payload = {
@@ -230,6 +228,12 @@ def test_save_disease_prediction_persists_telemetry_fields():
         res = save_disease_prediction(payload)
 
     assert res["telemetry_saved"] is True
+    # Find the disease_prediction table insert call
+    disease_table_calls = [
+        call for call in mock_admin_client.table.call_args_list
+        if call[0][0] == "disease_prediction"
+    ]
+    assert len(disease_table_calls) >= 1, "Expected at least one insert into disease_prediction"
     args = mock_table.insert.call_args[0][0]
     assert args["inference_outcome"] == "no_detection"
     assert args["execution_status"] == "success"
@@ -300,33 +304,36 @@ def test_get_all_diagnostics_for_admin_inconclusive_preserves_null_diagnosis():
 
 
 def test_duplicate_disease_inference_request_deduplication(realistic_inference_result):
-    """Verify identical POST /api/v1/predict/disease request within deduplication window reuses cached response."""
-    from App.backend.server import api_predict_disease, _recent_disease_requests
-    from unittest.mock import AsyncMock
-    import asyncio
+    """Verify identical POST /api/v1/predict/disease within 10-second window reuses cached response (predict called only once)."""
+    from App.backend.server import app as fastapi_app, _recent_disease_requests
+    from starlette.testclient import TestClient
+    import io
 
     _recent_disease_requests.clear()
 
-    mock_image = MagicMock()
-    mock_image.filename = "leaf.jpg"
-    mock_image.content_type = "image/jpeg"
-    mock_image.read = AsyncMock(return_value=b"same_raw_image_bytes")
+    tc = TestClient(fastapi_app, raise_server_exceptions=True)
+    fake_image_bytes = b"same_raw_image_bytes"
 
     with patch("App.backend.server.predict_disease_and_pests", return_value=realistic_inference_result) as mock_predict, \
          patch("App.backend.server.save_disease_prediction", return_value={"telemetry_saved": True}):
 
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # First request
-            res1 = loop.run_until_complete(api_predict_disease(crop="Rice", image=mock_image, current_user=None))
-            # Second duplicate request
-            res2 = loop.run_until_complete(api_predict_disease(crop="Rice", image=mock_image, current_user=None))
-        finally:
-            loop.close()
+        # First request
+        res1 = tc.post(
+            "/api/v1/predict/disease",
+            data={"crop": "Rice"},
+            files={"image": ("leaf.jpg", io.BytesIO(fake_image_bytes), "image/jpeg")},
+        )
+        # Second identical request (same crop + same image bytes)
+        res2 = tc.post(
+            "/api/v1/predict/disease",
+            data={"crop": "Rice"},
+            files={"image": ("leaf.jpg", io.BytesIO(fake_image_bytes), "image/jpeg")},
+        )
 
-    assert res1 == res2
+    assert res1.status_code == 200
+    assert res2.status_code == 200
+    assert res1.json()["success"] is True
+    assert res2.json()["success"] is True
     # predict_disease_and_pests must be called ONCE (second request hit cache)
     assert mock_predict.call_count == 1
-
 

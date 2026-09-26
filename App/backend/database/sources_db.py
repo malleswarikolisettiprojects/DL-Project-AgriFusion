@@ -174,24 +174,24 @@ def init_sources_db():
                 "verified_by_admin_id": "system_admin",
                 "caveats": [],
             }
-        ]
+            ]
 
-        for s in seed_sources:
-            cursor.execute("""
-                INSERT INTO knowledge_sources (
-                    id, title, organization, source_type, subject, crop, state_relevance_json,
-                    official_url, document_format, language, verification_status, verified_date,
-                    verified_by_admin_id, verification_notes, last_indexed_at, index_status,
-                    is_active, needs_review, caveats_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                s["id"], s["title"], s["organization"], s["source_type"], s["subject"], s["crop"],
-                json.dumps(s["state_relevance"]), s["official_url"], s["document_format"],
-                s["language"], s["verification_status"], s["verified_date"], s["verified_by_admin_id"],
-                s.get("verification_notes", ""), s.get("last_indexed_at"), s.get("index_status", "indexed"), s.get("is_active", 1),
-                s.get("needs_review", 0), json.dumps(s.get("caveats", []))
-            ))
-        conn.commit()
+            for s in seed_sources:
+                cursor.execute("""
+                    INSERT INTO knowledge_sources (
+                        id, title, organization, source_type, subject, crop, state_relevance_json,
+                        official_url, document_format, language, verification_status, verified_date,
+                        verified_by_admin_id, verification_notes, last_indexed_at, index_status,
+                        is_active, needs_review, caveats_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    s["id"], s["title"], s["organization"], s["source_type"], s["subject"], s["crop"],
+                    json.dumps(s["state_relevance"]), s["official_url"], s["document_format"],
+                    s["language"], s["verification_status"], s["verified_date"], s["verified_by_admin_id"],
+                    s.get("verification_notes", ""), s.get("last_indexed_at"), s.get("index_status", "indexed"), s.get("is_active", 1),
+                    s.get("needs_review", 0), json.dumps(s.get("caveats", []))
+                ))
+            conn.commit()
     finally:
         conn.close()
     _sources_db_initialized = True
