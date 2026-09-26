@@ -78,6 +78,7 @@ def test_below_threshold_candidate():
         assert res["primary_diagnosis"] is None
         assert res["top_confidence"] == 0.18
         assert res["is_low_confidence"] is True
+        assert res["low_confidence_notice"] is not None
         assert res["rag_remedies"] is None
         assert "below" in res["notice"] and "threshold" in res["notice"]
 
@@ -96,12 +97,14 @@ def test_zero_detections():
         res = predict_disease_and_pests(crop="rice", raw=raw)
 
         assert res["inference_outcome"] == "no_detection"
-        # MUST NOT default to "Healthy Crop Leaf"!
+        assert res["is_low_confidence"] is False
         assert res["primary_diagnosis"] is None
         assert res["top_confidence"] is None
-        assert res["is_low_confidence"] is True
+        assert res["low_confidence_notice"] is None
         assert res["rag_remedies"] is None
         assert "No disease or pest symptoms were detected" in res["notice"]
+        # MUST NOT claim a candidate failed threshold!
+        assert "threshold" not in res["notice"].lower()
 
 def test_all_providers_failing():
     """5. Test all model providers failing or erroring out (provider_error)."""
@@ -121,7 +124,8 @@ def test_all_providers_failing():
         assert res["inference_outcome"] == "provider_error"
         assert res["primary_diagnosis"] is None
         assert res["top_confidence"] is None
-        assert res["is_low_confidence"] is True
+        assert res["is_low_confidence"] is False
+        assert res["low_confidence_notice"] is None
         assert res["rag_remedies"] is None
         assert "currently unavailable" in res["notice"]
 
@@ -143,6 +147,8 @@ def test_provider_timeout():
         assert res["inference_outcome"] == "provider_error"
         assert res["primary_diagnosis"] is None
         assert res["top_confidence"] is None
+        assert res["is_low_confidence"] is False
+        assert res["low_confidence_notice"] is None
         assert res["execution_status"] == "error"
 
 def test_admin_telemetry_safety_and_no_pii():

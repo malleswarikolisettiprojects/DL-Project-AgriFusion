@@ -456,7 +456,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         )
 
     elif inference_outcome == "no_detection":
-        is_low_confidence = True
+        is_low_confidence = False
         primary_label = None  # Do NOT fabricate healthy diagnosis
         top_confidence_val = None
         notice_text = (
@@ -465,7 +465,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         )
 
     elif inference_outcome == "provider_error":
-        is_low_confidence = True
+        is_low_confidence = False
         primary_label = None  # Do NOT fabricate healthy diagnosis
         top_confidence_val = None
         if total_configured == 0:
