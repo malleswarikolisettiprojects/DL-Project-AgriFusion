@@ -156,7 +156,9 @@ def normalize_detections(items: list[dict[str, Any]], source: str) -> list[dict[
     output = []
     for item in items[:MAX_DETECTIONS]:
         box = item.get("box", {}) or {}
-        confidence = item.get("confidence", item.get("score", 0.0))
+        raw_conf = float(item.get("confidence", item.get("score", 0.0)))
+        # Normalize 0-100 percentage scale to 0.0-1.0 float scale if needed
+        confidence = raw_conf / 100.0 if (raw_conf > 1.0 and raw_conf <= 100.0) else raw_conf
         label = item.get("class", item.get("label", "unknown"))
         if "x" in item:
             x, y, w, h = [float(item.get(k, 0)) for k in ("x", "y", "width", "height")]
@@ -404,15 +406,15 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
             other_possible_detections.append(det)
 
     # Classify inference_outcome into one of 4 distinct categories:
-    # 1. provider_error: all configured providers failed/timed out/skipped
-    # 2. no_detection: providers responded successfully, but zero candidate detections were returned
-    # 3. low_confidence: candidate detections exist, but top candidate is below LOW_CONFIDENCE_THRESHOLD
-    # 4. detected: top candidate meets or exceeds threshold
-    if providers_succeeded == 0 and total_configured > 0:
+    # 1. provider_error: zero configured models OR all configured providers failed/timed out/skipped (succeeded == 0)
+    # 2. no_detection: providers responded successfully (succeeded > 0), but zero candidate detections were returned
+    # 3. low_confidence: candidate detections exist, but top candidate is below applied threshold (min_conf)
+    # 4. detected: top candidate meets or exceeds applied threshold (min_conf)
+    if total_configured == 0 or providers_succeeded == 0:
         inference_outcome = "provider_error"
     elif not all_raw_detections:
         inference_outcome = "no_detection"
-    elif not all_winners or all_winners[0]["detection"].get("confidence", 0.0) < LOW_CONFIDENCE_THRESHOLD:
+    elif not all_winners:
         inference_outcome = "low_confidence"
     else:
         inference_outcome = "detected"
@@ -446,9 +448,10 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     elif inference_outcome == "low_confidence":
         is_low_confidence = True
         top_confidence_val = round(float(all_raw_detections[0]["confidence"]), 4) if all_raw_detections else None
+        top_conf_pct = f"{top_confidence_val * 100:.1f}%" if top_confidence_val is not None else "low"
         primary_label = None  # Do NOT fabricate healthy diagnosis
         notice_text = (
-            f"Candidate detected but confidence ({top_confidence_val if top_confidence_val is not None else 'low'}) is below minimum threshold ({LOW_CONFIDENCE_THRESHOLD:.0%}). "
+            f"Candidate pattern detected but confidence ({top_conf_pct}) is below the required threshold ({min_conf * 100:.0f}%). "
             "Results may not be reliable. Please consult an agriculture professional."
         )
 
@@ -465,10 +468,16 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         is_low_confidence = True
         primary_label = None  # Do NOT fabricate healthy diagnosis
         top_confidence_val = None
-        notice_text = (
-            "Automated visual analysis is currently unavailable or timed out. "
-            "Please try again later or consult a local agronomy expert."
-        )
+        if total_configured == 0:
+            notice_text = (
+                "No visual inference models are configured for this selection. "
+                "Automated analysis is currently unavailable."
+            )
+        else:
+            notice_text = (
+                "Automated visual analysis is currently unavailable or timed out. "
+                "Please try again later or consult a local agronomy expert."
+            )
 
     if is_custom_crop and custom_crop_notice:
         if notice_text and notice_text != custom_crop_notice:
