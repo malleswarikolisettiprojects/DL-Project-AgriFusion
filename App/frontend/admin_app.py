@@ -612,14 +612,16 @@ elif menu == "💬 Farmer Feedback & Support":
 elif menu == "🔬 Crop Diagnostics Audit":
     st.header("🔬 Crop Health Diagnostics Audit & Review")
 
-    d_col1, d_col2, d_col3, d_col4 = st.columns(4)
+    d_col1, d_col2, d_col3, d_col4, d_col5 = st.columns(5)
     with d_col1:
         diag_crop_f = st.selectbox("Crop Filter", ["All", "Paddy / Rice", "Cotton", "Chilli", "Maize", "Groundnut", "Tomato", "Sugarcane"])
     with d_col2:
         diag_state_f = st.selectbox("State Filter", ["All", "Andhra Pradesh", "Telangana", "Karnataka", "Punjab", "Maharashtra"])
     with d_col3:
-        diag_status_f = st.selectbox("Status Filter", ["All", "reviewed", "pending", "flagged"])
+        diag_status_f = st.selectbox("Review Status", ["All", "reviewed", "pending_review", "flagged"])
     with d_col4:
+        diag_outcome_f = st.selectbox("Inference Outcome", ["All", "detected", "no_detection", "low_confidence", "provider_error"])
+    with d_col5:
         diag_search_input = st.text_input("Search Diagnostics", value="", placeholder="Crop, diagnosis, region, ID...")
 
     params = {"page": 1, "page_size": 50}
@@ -629,6 +631,8 @@ elif menu == "🔬 Crop Diagnostics Audit":
         params["state"] = diag_state_f
     if diag_status_f != "All":
         params["status"] = diag_status_f
+    if diag_outcome_f != "All":
+        params["inference_outcome"] = diag_outcome_f
     if diag_search_input.strip():
         params["search"] = diag_search_input.strip()
 
@@ -641,12 +645,39 @@ elif menu == "🔬 Crop Diagnostics Audit":
 
             if items:
                 for diag in items:
-                    diag_title = diag.get("primary_diagnosis") or diag.get("diagnosis") or "No Pathology Detected"
+                    outcome = diag.get("inference_outcome")
+                    exec_stat = diag.get("execution_status") or "success"
+
+                    if diag.get("primary_diagnosis"):
+                        diag_title = diag.get("primary_diagnosis")
+                    elif outcome == "no_detection":
+                        diag_title = "No Disease or Pest Detected"
+                    elif outcome == "low_confidence":
+                        diag_title = "Inconclusive / Low Confidence"
+                    elif outcome == "provider_error":
+                        diag_title = "Inference Engine Error / Timeout"
+                    else:
+                        diag_title = "Inconclusive"
+
                     conf = diag.get("confidence")
-                    conf_str = f"{round(conf * 100, 1)}% confidence" if conf is not None else "N/A confidence"
-                    with st.expander(f"🔬 {diag_title} on {diag.get('crop')} ({conf_str}) — {diag.get('state') or 'N/A'}"):
-                        st.write(f"**Report ID:** `{diag.get('id')}` | **Date:** {diag.get('created_at')} | **Severity:** `{diag.get('severity') or 'N/A'}` | **Status:** `{diag.get('status') or 'N/A'}`")
-                        sec_list = diag.get("secondary_matches") or diag.get("treatment_recommendations") or []
+                    conf_str = f"{round(conf * 100, 1)}% confidence" if conf is not None else "Confidence N/A"
+                    badge_outcome = outcome.upper() if outcome else "UNSPECIFIED"
+                    expander_header = f"🔬 {diag_title} on {diag.get('crop')} ({conf_str}) — Outcome: `{badge_outcome}` [{exec_stat}]"
+
+                    with st.expander(expander_header):
+                        st.write(f"**Report ID:** `{diag.get('id')}` | **Request ID:** `{diag.get('request_id') or 'N/A'}` | **Date:** `{diag.get('created_at')}`")
+                        st.write(f"**Inference Outcome:** `{outcome}` | **Execution Status:** `{exec_stat}` | **Review Status:** `{diag.get('status') or 'pending_review'}`")
+                        st.write(f"**Location:** {diag.get('district') or 'N/A'}, {diag.get('state') or 'N/A'} | **Actor Ref:** `{diag.get('actor_ref') or 'Anonymous'}`")
+
+                        col_prov, col_cand = st.columns(2)
+                        with col_prov:
+                            st.markdown("##### ⚙️ Providers Summary")
+                            st.json(diag.get("providers_summary") or {})
+                        with col_cand:
+                            st.markdown("##### 🎯 Candidate & Threshold Summary")
+                            st.json(diag.get("candidate_summary") or {})
+
+                        sec_list = diag.get("secondary_matches") or []
                         if sec_list:
                             st.write("**Secondary Detections / Matches:**")
                             for sec in sec_list:

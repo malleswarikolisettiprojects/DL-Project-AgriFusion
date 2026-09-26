@@ -397,6 +397,8 @@ def get_all_diagnostics_for_admin(
     end_date: Optional[str] = None,
     search: Optional[str] = None,
     review_status: Optional[str] = None,
+    inference_outcome: Optional[str] = None,
+    execution_status: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Fetch paginated diagnostic inference records across all farmers from single source of truth (disease_prediction) with full-cohort metrics (non-PII)."""
     page = max(1, page)
@@ -435,6 +437,10 @@ def get_all_diagnostics_for_admin(
             effective_status = (status or review_status or "").strip()
             if effective_status:
                 query = query.eq("status", effective_status)
+            if inference_outcome and inference_outcome.strip():
+                query = query.eq("inference_outcome", inference_outcome.strip())
+            if execution_status and execution_status.strip():
+                query = query.eq("execution_status", execution_status.strip())
             if start_date:
                 query = query.gte("created_at", start_date)
             if end_date:
@@ -450,6 +456,8 @@ def get_all_diagnostics_for_admin(
             if state and state.strip(): cnt_query = cnt_query.ilike("state", f"%{state.strip()}%")
             if district and district.strip(): cnt_query = cnt_query.ilike("district", f"%{district.strip()}%")
             if effective_status: cnt_query = cnt_query.eq("status", effective_status)
+            if inference_outcome and inference_outcome.strip(): cnt_query = cnt_query.eq("inference_outcome", inference_outcome.strip())
+            if execution_status and execution_status.strip(): cnt_query = cnt_query.eq("execution_status", execution_status.strip())
             if start_date: cnt_query = cnt_query.gte("created_at", start_date)
             if end_date: cnt_query = cnt_query.lte("created_at", end_date)
             if search and search.strip(): cnt_query = cnt_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
@@ -463,21 +471,29 @@ def get_all_diagnostics_for_admin(
                 res = query.order("created_at", desc=True).range(offset, offset + page_size - 1).execute()
                 raw_items = res.data or []
 
-            # 2. Build item list with secondary_matches mapping
+            # 2. Build item list with secondary_matches mapping & new telemetry fields
             items = []
             for r in raw_items:
                 all_det = r.get("all_detections") if isinstance(r.get("all_detections"), list) else []
-                diag_name = r.get("primary_diagnosis") or r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient")
-                conf_raw = r.get("confidence")
-                if conf_raw is None:
-                    conf_raw = r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence")
-                
-                if not diag_name and isinstance(all_det, list) and len(all_det) > 0:
-                    first_det = all_det[0]
-                    if isinstance(first_det, dict):
-                        diag_name = first_det.get("label")
-                        if conf_raw is None:
-                            conf_raw = first_det.get("confidence")
+                outcome = r.get("inference_outcome")
+                exec_stat = r.get("execution_status") or "success"
+
+                # Keep diagnosis & confidence null for inconclusive, low_confidence, no_detection, or error outcomes
+                if outcome in ("no_detection", "low_confidence", "provider_error") or r.get("primary_diagnosis") is None:
+                    diag_name = r.get("primary_diagnosis")  # Preserved as None if not recorded
+                    conf_raw = r.get("confidence")
+                else:
+                    diag_name = r.get("primary_diagnosis") or r.get("top_disease") or r.get("top_pest") or r.get("top_nutrient")
+                    conf_raw = r.get("confidence")
+                    if conf_raw is None:
+                        conf_raw = r.get("top_disease_confidence") or r.get("top_pest_confidence") or r.get("top_nutrient_confidence")
+
+                    if not diag_name and isinstance(all_det, list) and len(all_det) > 0:
+                        first_det = all_det[0]
+                        if isinstance(first_det, dict):
+                            diag_name = first_det.get("label")
+                            if conf_raw is None:
+                                conf_raw = first_det.get("confidence")
 
                 conf_val = float(conf_raw) if conf_raw is not None else None
                 
@@ -506,18 +522,29 @@ def get_all_diagnostics_for_admin(
                     "secondary_matches": sec_matches,
                     "status": r.get("status"),
                     "severity": r.get("severity"),
+                    "inference_outcome": outcome,
+                    "execution_status": exec_stat,
+                    "providers_summary": r.get("providers_summary") or {},
+                    "candidate_summary": r.get("candidate_summary") or {},
+                    "request_id": r.get("request_id"),
+                    "actor_ref": r.get("actor_ref"),
+                    "annotated_image_url": r.get("annotated_image_url"),
+                    "custom_crop_notice": r.get("custom_crop_notice"),
                     "identity_redacted": True,
                 }
                 items.append(item_dict)
 
             # 3. Calculate aggregate summary metrics across FULL filtered cohort
-            stats_query = admin_supabase.table("disease_prediction").select("crop, top_disease, top_pest, top_nutrient, top_disease_confidence, top_pest_confidence, top_nutrient_confidence")
+            stats_query = admin_supabase.table("disease_prediction").select("crop, top_disease, top_pest, top_nutrient, top_disease_confidence, top_pest_confidence, top_nutrient_confidence, primary_diagnosis, confidence, inference_outcome")
             if crop and crop.strip(): stats_query = stats_query.ilike("crop", f"%{crop.strip()}%")
             if state and state.strip(): stats_query = stats_query.ilike("state", f"%{state.strip()}%")
             if district and district.strip(): stats_query = stats_query.ilike("district", f"%{district.strip()}%")
             if effective_status: stats_query = stats_query.eq("status", effective_status)
+            if inference_outcome and inference_outcome.strip(): stats_query = stats_query.eq("inference_outcome", inference_outcome.strip())
+            if execution_status and execution_status.strip(): stats_query = stats_query.eq("execution_status", execution_status.strip())
             if start_date: stats_query = stats_query.gte("created_at", start_date)
             if end_date: stats_query = stats_query.lte("created_at", end_date)
+            if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
             if search and search.strip(): stats_query = stats_query.or_(f"crop.ilike.%{search.strip()}%,top_disease.ilike.%{search.strip()}%,state.ilike.%{search.strip()}%,district.ilike.%{search.strip()}%")
 
             stats_res = stats_query.execute()

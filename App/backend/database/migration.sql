@@ -689,14 +689,28 @@ CREATE TABLE IF NOT EXISTS public.disease_prediction (
     custom_crop_notice TEXT,
     state TEXT,
     district TEXT,
-    status TEXT DEFAULT 'reviewed'
+    status TEXT DEFAULT 'pending_review',
+    inference_outcome TEXT,
+    execution_status TEXT,
+    providers_summary JSONB DEFAULT '{}'::jsonb,
+    candidate_summary JSONB DEFAULT '{}'::jsonb,
+    request_id TEXT,
+    actor_ref TEXT
 );
 
 ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS primary_diagnosis TEXT;
 ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS confidence NUMERIC(5, 4);
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS inference_outcome TEXT;
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS execution_status TEXT;
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS providers_summary JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS candidate_summary JSONB DEFAULT '{}'::jsonb;
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE public.disease_prediction ADD COLUMN IF NOT EXISTS actor_ref TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_disease_pred_created_at ON public.disease_prediction(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_disease_pred_crop ON public.disease_prediction(crop);
+CREATE INDEX IF NOT EXISTS idx_disease_pred_outcome ON public.disease_prediction(inference_outcome);
+CREATE INDEX IF NOT EXISTS idx_disease_pred_exec_status ON public.disease_prediction(execution_status);
 
 ALTER TABLE public.disease_prediction ENABLE ROW LEVEL SECURITY;
 

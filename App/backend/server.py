@@ -882,6 +882,44 @@ async def api_predict_market(
         )
 
 
+import hashlib
+
+_recent_disease_requests: Dict[str, Any] = {}
+
+
+def _safe_md5_hash(raw_input: Any) -> str:
+    if isinstance(raw_input, (bytes, bytearray)):
+        b_data = bytes(raw_input)
+    else:
+        try:
+            b_data = str(raw_input).encode("utf-8")
+        except Exception:
+            b_data = b""
+    return hashlib.md5(b_data).hexdigest()
+
+
+def _get_duplicate_disease_response(user_id: Optional[str], crop: str, raw_bytes: Any) -> Optional[dict]:
+    now = time.time()
+    expired = [k for k, (ts, _) in _recent_disease_requests.items() if now - ts > 30.0]
+    for k in expired:
+        _recent_disease_requests.pop(k, None)
+
+    h = _safe_md5_hash(raw_bytes)
+    key = f"{user_id or 'anon'}:{crop.strip().lower()}:{h}"
+    if key in _recent_disease_requests:
+        ts, res = _recent_disease_requests[key]
+        if now - ts < 10.0:
+            return res
+    return None
+
+
+def _cache_duplicate_disease_response(user_id: Optional[str], crop: str, raw_bytes: Any, res: dict) -> None:
+    now = time.time()
+    h = _safe_md5_hash(raw_bytes)
+    key = f"{user_id or 'anon'}:{crop.strip().lower()}:{h}"
+    _recent_disease_requests[key] = (now, res)
+
+
 # 6. Multi-Provider Disease & Pest Diagnosis API (Multipart File Upload)
 @app.post("/api/v1/predict/disease")
 async def api_predict_disease(
@@ -894,9 +932,18 @@ async def api_predict_disease(
     logger.info("[%s] POST /api/v1/predict/disease started - crop=%s filename=%s", req_id, crop, image.filename)
     user_id = current_user.id if current_user else None
     user_email = current_user.email if current_user else None
+    actor_ref = user_id or user_email or f"anon_session_{req_id}"
+
     try:
         raw = await image.read()
         content_type = (image.content_type or "image/jpeg").lower()
+
+        # Prevent accidental duplicate inference retries within 10-second window
+        cached_response = _get_duplicate_disease_response(user_id, crop, raw)
+        if cached_response is not None:
+            logger.info("[%s] Returning cached result for duplicate POST /api/v1/predict/disease request", req_id)
+            return cached_response
+
         result = await asyncio.wait_for(
             run_in_threadpool(
                 predict_disease_and_pests,
@@ -977,6 +1024,9 @@ async def api_predict_disease(
                 "custom_crop_notice":      result.get("notice") or result.get("custom_crop_notice"),
                 "inference_outcome":       result.get("inference_outcome", "detected"),
                 "providers_summary":       result.get("providers_summary"),
+                "candidate_summary":       result.get("candidate_summary"),
+                "request_id":              req_id,
+                "actor_ref":              actor_ref,
                 "request_summary":         {"filename": image.filename, "content_type": content_type},
                 "result_summary":         {
                     "primary_diagnosis": primary_diag,
@@ -994,7 +1044,9 @@ async def api_predict_disease(
         except Exception as db_err:
             logger.warning("[%s] Supabase disease log non-blocking warning: %s", req_id, db_err)
         logger.info("[%s] Disease inference success in %sms", req_id, duration_ms)
-        return {"success": True, "stage": "disease", "result": result}
+        resp_obj = {"success": True, "stage": "disease", "result": result}
+        _cache_duplicate_disease_response(user_id, crop, raw, resp_obj)
+        return resp_obj
     except ValueError as val_err:
         duration_ms = round((time.time() - t0) * 1000, 2)
         logger.warning("[%s] Disease upload validation warning: %s", req_id, val_err)

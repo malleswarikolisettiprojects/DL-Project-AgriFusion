@@ -849,6 +849,8 @@ async def get_admin_diagnostics(
     end_date: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     review_status: Optional[str] = Query(None),
+    inference_outcome: Optional[str] = Query(None),
+    execution_status: Optional[str] = Query(None),
     admin_user: CurrentUser = Depends(require_admin),
 ):
     """Retrieve paginated crop health diagnostic reports for administrative review (anonymized/minimized PII)."""
@@ -863,6 +865,8 @@ async def get_admin_diagnostics(
             "state": state,
             "status": status,
             "review_status": review_status,
+            "inference_outcome": inference_outcome,
+            "execution_status": execution_status,
             "search": search,
         },
     )
@@ -881,6 +885,8 @@ async def get_admin_diagnostics(
             end_date=end_date,
             search=search,
             review_status=review_status,
+            inference_outcome=inference_outcome,
+            execution_status=execution_status,
         )
         return {
             "items": data.get("items", []),

@@ -454,7 +454,13 @@ def save_disease_prediction(data):
             "annotated_image_url":     data.get("annotated_image_url"),
             "all_detections":          data.get("all_detections") or [],
             "custom_crop_notice":      data.get("custom_crop_notice"),
-            "status":                  data.get("status", "pending_review"),
+            "status":                  data.get("status", "pending_review"),  # Human review status
+            "inference_outcome":       data.get("inference_outcome", "detected"),
+            "execution_status":       data.get("execution_status", "success"),
+            "providers_summary":       data.get("providers_summary") or {},
+            "candidate_summary":       data.get("candidate_summary") or {},
+            "request_id":              data.get("request_id"),
+            "actor_ref":              data.get("actor_ref") or data.get("user_id"),
         }
         if data.get("state"):
             insert_payload["state"] = data.get("state")
@@ -468,11 +474,11 @@ def save_disease_prediction(data):
             if disease_resp and disease_resp.data:
                 telemetry_saved = True
         except Exception as insert_err:
-            # Fallback if primary_diagnosis or confidence columns do not exist in PostgREST schema cache
+            # Fallback if new columns do not exist in PostgREST schema cache yet
             print(f"Warning: Primary insert to disease_prediction table failed: {insert_err}. Trying fallback payload...")
             fallback_payload = dict(insert_payload)
-            fallback_payload.pop("primary_diagnosis", None)
-            fallback_payload.pop("confidence", None)
+            for k in ("inference_outcome", "execution_status", "providers_summary", "candidate_summary", "request_id", "actor_ref", "primary_diagnosis", "confidence"):
+                fallback_payload.pop(k, None)
             try:
                 disease_resp = admin_client.table("disease_prediction").insert(fallback_payload).execute()
                 if disease_resp and disease_resp.data:

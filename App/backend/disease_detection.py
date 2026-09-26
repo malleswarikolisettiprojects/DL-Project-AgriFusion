@@ -490,6 +490,21 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         except Exception as exc:
             print(f"Warning: Supabase Storage upload skipped/failed: {exc}")
 
+    candidate_summary = {
+        "crop_models_evaluated": len(crop_runs),
+        "pest_models_evaluated": len(pest_runs),
+        "nutrient_models_evaluated": len(nutrient_runs),
+        "total_providers_contacted": total_configured,
+        "total_providers_succeeded": providers_succeeded,
+        "applied_thresholds": {
+            "low_confidence_threshold": LOW_CONFIDENCE_THRESHOLD,
+            "custom_crop_conf_threshold": CUSTOM_CROP_CONF_THRESHOLD,
+            "confidence_threshold": CONFIDENCE,
+        },
+        "is_low_confidence": is_low_confidence,
+        "inference_outcome": inference_outcome,
+    }
+
     output = {
         "id": prediction_id,
         "disclaimer": AI_DISCLAIMER_TEXT,
@@ -507,6 +522,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         "is_low_confidence": is_low_confidence,
         "low_confidence_notice": notice_text if is_low_confidence else None,
         "providers_summary": providers_summary,
+        "candidate_summary": candidate_summary,
         "selected_crop_result": top_crop,
         "selected_pest_result": top_pest,
         "selected_nutrient_result": top_nutrient,
