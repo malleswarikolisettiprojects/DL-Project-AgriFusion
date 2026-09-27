@@ -118,11 +118,9 @@ SHARED_MODELS: dict[str, list[dict[str, str]]] = {
     "pest": [
         {"provider": "roboflow", "name": "pests-rt37d", "model_id": "pests-rt37d/1", "url": "https://universe.roboflow.com/digitalws/pests-rt37d"},
         {"provider": "roboflow", "name": "pest-detection-utqxd", "model_id": "pest-detection-utqxd/8", "url": "https://universe.roboflow.com/uzhavarconnect/pest-detection-utqxd"},
-        {"provider": "huggingface", "name": "insect-detection-yolov8", "model_id": "Mustafa5645344/insect-detection-yolov8", "url": "https://huggingface.co/Mustafa5645344/insect-detection-yolov8"},
-        {"provider": "huggingface", "name": "yolo11s-pest-detection", "model_id": "underdogquality/yolo11s-pest-detection", "url": "https://huggingface.co/underdogquality/yolo11s-pest-detection"},
     ],
     "nutrient": [
-        {"provider": "huggingface", "name": "nutrient-deficiency-rfdetr", "model_id": "malleswari-kolisetti/nutrient-deficiency-obhfe-scvr5-1-rfdetr-small-t1", "url": "https://universe.roboflow.com/agrivision-2025/nutrient-deficiency-obhfe"},
+        {"provider": "roboflow", "name": "nutrient-deficiency-obhfe", "model_id": "nutrient-deficiency-obhfe/1", "url": "https://universe.roboflow.com/agrivision-2025/nutrient-deficiency-obhfe"},
     ],
 }
 _model_cache: dict[str, Any] = {}
