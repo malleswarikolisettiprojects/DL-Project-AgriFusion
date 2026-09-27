@@ -266,7 +266,7 @@ def run_roboflow(config: dict[str, str], raw: bytes, content_type: str) -> dict[
             headers=headers,
             params=params,
             files={"file": ("image", raw, content_type)},
-            timeout=5.0,
+            timeout=httpx.Timeout(3.5, connect=2.0),
         )
         dt = round((time.time() - t0) * 1000, 2)
         http_status = response.status_code
@@ -376,7 +376,7 @@ def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "ima
     for url in urls:
         try:
             headers = {**base_headers, "Content-Type": content_type}
-            res = httpx.post(url, headers=headers, content=raw, timeout=5.0)
+            res = httpx.post(url, headers=headers, content=raw, timeout=httpx.Timeout(3.5, connect=2.0))
             last_http_status = res.status_code
             if res.status_code == 200:
                 response = res
@@ -386,7 +386,7 @@ def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "ima
                 b64_data = base64.b64encode(raw).decode("utf-8")
                 json_headers = {**base_headers, "Content-Type": "application/json"}
                 json_body = {"inputs": f"data:{content_type};base64,{b64_data}"}
-                res_j = httpx.post(url, headers=json_headers, json=json_body, timeout=5.0)
+                res_j = httpx.post(url, headers=json_headers, json=json_body, timeout=httpx.Timeout(3.5, connect=2.0))
                 last_http_status = res_j.status_code
                 if res_j.status_code == 200:
                     response = res_j
@@ -598,7 +598,7 @@ def predict_disease_and_pests(
         raise ValueError("The uploaded file is not a valid image.") from exc
     upload_validation_ms = round((time.time() - t_val_start) * 1000, 2)
 
-    # Stage 2: Multi-provider Vision Inference (8.0s hard timeout)
+    # Stage 2: Multi-provider Vision Inference (4.5s hard timeout)
     t_inf_start = time.time()
     import concurrent.futures
     all_configs = crop_configs + SHARED_MODELS["pest"] + SHARED_MODELS["nutrient"]
@@ -607,7 +607,7 @@ def predict_disease_and_pests(
     executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(all_configs) or 1)
     try:
         future_map = {executor.submit(run_provider, cfg, pil_image, raw, content_type): cfg for cfg in all_configs}
-        done, pending = concurrent.futures.wait(future_map.keys(), timeout=8.0)
+        done, pending = concurrent.futures.wait(future_map.keys(), timeout=4.5)
         for future, cfg in future_map.items():
             if future in done:
                 try:
@@ -642,7 +642,7 @@ def predict_disease_and_pests(
                     "http_status": None,
                     "failure_class": "timeout",
                     "error": "Provider timed out",
-                    "latency_ms": 8000.0,
+                    "latency_ms": 4500.0,
                     "detections": [],
                     "top_confidence": 0.0,
                 }
@@ -805,16 +805,18 @@ def predict_disease_and_pests(
             healthy_msg = "Crop appears healthy based on visual AI analysis."
             notice_text = f"{custom_crop_notice} {healthy_msg}" if custom_crop_notice else healthy_msg
         else:
+            rag_exec = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as rag_exec:
-                    rag_fut = rag_exec.submit(generate_rag_remedies, primary_label, crop=crop)
-                    rag_remedies = rag_fut.result(timeout=3.0)
+                rag_fut = rag_exec.submit(generate_rag_remedies, primary_label, crop=crop)
+                rag_remedies = rag_fut.result(timeout=1.5)
             except concurrent.futures.TimeoutError:
-                print(f"[{req_id}] RAG remedies generation timed out (>3.0s) - proceeding without remedies")
+                print(f"[{req_id}] RAG remedies generation timed out (>1.5s) - proceeding without remedies")
                 rag_remedies = None
             except Exception as rag_err:
                 print(f"[{req_id}] RAG remedies generation warning: {rag_err}")
                 rag_remedies = None
+            finally:
+                rag_exec.shutdown(wait=False, cancel_futures=True)
 
             if has_crop_disease_models and crop_disease_succeeded == 0:
                 disease_warn = "Pest or nutrient candidate detected, but crop-specific disease assessment could not be completed because disease vision models timed out or were unavailable."
@@ -883,12 +885,14 @@ def predict_disease_and_pests(
             admin_client.storage.from_(SUPABASE_BUCKET).upload(storage_path, raw, {"content-type": content_type, "upsert": "false"})
             return admin_client.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
 
+        st_exec = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as st_exec:
-                st_fut = st_exec.submit(_do_upload)
-                image_url = st_fut.result(timeout=2.5)
+            st_fut = st_exec.submit(_do_upload)
+            image_url = st_fut.result(timeout=1.5)
         except Exception as exc:
             print(f"[{req_id}] Warning: Supabase Storage upload skipped/failed: {exc}")
+        finally:
+            st_exec.shutdown(wait=False, cancel_futures=True)
     storage_upload_ms = round((time.time() - t_st_start) * 1000, 2)
 
     # Stage 5: Non-blocking Telemetry DB Insert
