@@ -636,17 +636,55 @@ elif menu == "\U0001f52c Crop Diagnostics Audit":
     if diag_search_input.strip():
         params["search"] = diag_search_input.strip()
 
+    def _render_symptom_checklist(data):
+        """
+        Renders 'Symptoms to cross-check' section directly below detected condition.
+        Displays checklist items, Yes/No/Unsure options, clear disclaimer, and source links.
+        """
+        checklist = data.get("symptom_checklist") or []
+        rag = data.get("rag_remedies") or {}
+        if not checklist and isinstance(rag, dict):
+            checklist = rag.get("symptom_checklist") or []
+            
+        notice = data.get("symptom_checklist_notice") or (rag.get("symptom_checklist_notice") if isinstance(rag, dict) else None)
+
+        st.markdown("---")
+        st.markdown("### 📋 Symptoms to Cross-Check")
+        st.info(
+            "💡 **Farmer Verification Aid:** This checklist is a visual comparison aid to help you verify field symptoms against published agronomic literature. "
+            "Your selections are for self-assessment and do **not** automatically alter the AI model diagnosis."
+        )
+
+        if not checklist:
+            st.caption(f"ℹ️ {notice or 'No verified symptom reference available for this condition.'}")
+            return
+
+        for idx, item in enumerate(checklist, 1):
+            sym_text = item.get("symptom", "")
+            src_title = item.get("source_title") or "Verified Agricultural Reference"
+            src_url = item.get("source_url")
+            src_inst = item.get("source_institute") or ""
+
+            st.markdown(f"**{idx}. {sym_text}**")
+            if src_url and src_url.startswith("http"):
+                st.markdown(f"↳ *Source:* [{src_title}]({src_url}) ({src_inst})")
+            else:
+                st.caption(f"↳ Source: {src_title} ({src_inst})")
+
+            cols = st.columns([1, 1, 1, 3])
+            with cols[0]:
+                st.button(f"✅ Yes", key=f"sym_yes_{idx}_{data.get('id', idx)}")
+            with cols[1]:
+                st.button(f"❌ No", key=f"sym_no_{idx}_{data.get('id', idx)}")
+            with cols[2]:
+                st.button(f"❓ Unsure", key=f"sym_unsure_{idx}_{data.get('id', idx)}")
+            st.write("")
+
     # -- Helper: render disease-specific RAG guidance from backend rag_remedies --
     def _render_rag_guidance(rag):
         """
         Renders 'Suggested next steps' and 'Where this guidance comes from' using
         real rag_remedies fields from the backend. No hardcoded advice is inserted.
-
-        source_type values (set by backend):
-          "verified_public_document"  - matched from a verified external URL
-          "knowledge_base_document"   - matched from a local agronomy_docs file
-          "baseline_only"             - built-in BASELINE_REMEDIES; not source-verified
-          "no_match" / absent         - no source matched
         """
         rag_status = rag.get("rag_status", "")
         source_type = rag.get("source_type", "")
@@ -872,8 +910,9 @@ elif menu == "\U0001f52c Crop Diagnostics Audit":
                                 else:
                                     st.write(f"- {sec}")
 
-                        # -- Req 1-5: Guidance only for confirmed detections ---------------
+                        # -- Req 1-5: Guidance & Symptom Checklist only for confirmed detections ---------------
                         if outcome == "detected":
+                            _render_symptom_checklist(diag)
                             rag = diag.get("rag_remedies")
                             if isinstance(rag, dict) and rag:
                                 _render_rag_guidance(rag)

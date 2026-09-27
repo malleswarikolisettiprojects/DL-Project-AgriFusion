@@ -638,4 +638,111 @@ def test_all_providers_failing_regression():
         assert res["execution_status"] == "error"
 
 
+def test_get_symptom_checklist_sheath_blight():
+    """21. Test get_symptom_checklist returns authoritative symptoms for Rice Sheath Blight."""
+    from App.backend.agronomy_rag import get_symptom_checklist
+
+    res = get_symptom_checklist("Sheath Blight", crop="rice")
+    assert res["has_verified_symptoms"] is True
+    assert len(res["symptom_checklist"]) >= 3
+    assert "greenish-gray water-soaked lesions" in res["symptom_checklist"][0]["symptom"]
+    assert "TNAU" in res["source_title"] or "IRRI" in res["source_title"]
+    assert res["source_url"].startswith("http")
+
+
+def test_get_symptom_checklist_unverified_condition():
+    """22. Test get_symptom_checklist returns notice when no verified symptom reference exists."""
+    from App.backend.agronomy_rag import get_symptom_checklist
+
+    res = get_symptom_checklist("Unknown Fictional Disease", crop="rice")
+    assert res["has_verified_symptoms"] is False
+    assert res["symptom_checklist"] == []
+    assert "No verified symptom reference available" in res["symptom_checklist_notice"]
+
+
+def test_ancillary_model_404_resilience():
+    """23. Test ancillary nutrient model HTTP 404 does not invalidate a successful crop disease result."""
+    raw = create_test_image_bytes()
+
+    def mock_run_prov(cfg, img, raw_b, ct):
+        prov = cfg.get("provider")
+        model = cfg.get("model_id", cfg.get("name", ""))
+        if "nutrient" in model:
+            return {
+                "provider": prov,
+                "model": model,
+                "status": "error",
+                "http_status": 404,
+                "failure_class": "invalid_model_id",
+                "latency_ms": 150.0,
+                "detections": [],
+                "top_confidence": 0.0,
+            }
+        elif "rice-leaf-disease" in model:
+            return {
+                "provider": prov,
+                "model": model,
+                "status": "ok",
+                "http_status": 200,
+                "failure_class": None,
+                "latency_ms": 250.0,
+                "detections": [{"label": "Sheath Blight", "confidence": 0.88, "box_xyxy": [10, 10, 50, 50]}],
+                "top_confidence": 0.88,
+            }
+        else:
+            return {
+                "provider": prov,
+                "model": model,
+                "status": "ok",
+                "http_status": 200,
+                "failure_class": None,
+                "latency_ms": 200.0,
+                "detections": [],
+                "top_confidence": 0.0,
+            }
+
+    with patch("App.backend.disease_detection.run_provider", side_effect=mock_run_prov):
+        res = predict_disease_and_pests(crop="rice", raw=raw)
+
+        assert res["inference_outcome"] == "detected"
+        assert res["execution_status"] == "success"
+        assert res["primary_diagnosis"] == "Sheath Blight"
+        cats = res["providers_summary"]["categories"]
+        assert cats["disease"]["succeeded"] > 0
+        assert cats["nutrient"]["failed"] > 0
+        assert cats["nutrient"]["details"][0]["failure_class"] == "invalid_model_id"
+
+
+def test_advisory_engines_all_ml_modules():
+    """24. Test Advisory Engine functions for Crop, Irrigation, Yield, Climate Risk, and Market modules."""
+    from App.backend.agronomy_rag import (
+        generate_crop_recommendation_advisory,
+        generate_irrigation_advisory,
+        generate_yield_advisory,
+        generate_climate_risk_advisory,
+        generate_market_advisory,
+    )
+
+    crop_adv = generate_crop_recommendation_advisory("rice", {"soil_ph": 6.8, "nitrogen": 120}, {"temperature": 29})
+    assert crop_adv["crop"] == "Rice"
+    assert "ICAR" in crop_adv["source_institute"]
+
+    irr_adv = generate_irrigation_advisory("rice", soil_moisture=25.0, status="critical")
+    assert irr_adv["irrigation_status"] == "Required Immediately"
+    assert "FAO-56" in irr_adv["source_title"]
+
+    yield_adv = generate_yield_advisory("rice", predicted_yield=45.5, state="Andhra Pradesh", district="Guntur")
+    assert yield_adv["predicted_yield_q_ha"] == 45.5
+    assert "Directorate of Economics" in yield_adv["source_title"]
+
+    clim_adv = generate_climate_risk_advisory("rice", risk_level="High", heat_index=41.0, dry_spell_days=10)
+    assert clim_adv["risk_level"] == "High"
+    assert "PMFBY" in clim_adv["crop_insurance_action"]
+
+    mkt_adv = generate_market_advisory("paddy", price_trend="upward")
+    assert mkt_adv["commodity"] == "Paddy"
+    assert "e-NAM" in mkt_adv["official_portal"]
+
+
+
 

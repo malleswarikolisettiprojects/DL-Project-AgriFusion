@@ -1103,6 +1103,101 @@ async def api_predict_disease(
         return make_error_response(502, "disease", "DISEASE_INFERENCE_FAILED", f"Disease inference failed: {str(err)}", retryable=True)
 
 
+# 6a-2. Durable Async Job Flow for Disease Diagnosis
+DISEASE_JOBS_DIR = BASE_DIR / "Data" / "disease_jobs"
+DISEASE_JOBS_DIR.mkdir(parents=True, exist_ok=True)
+
+def _save_disease_job_file(job_id: str, data: dict):
+    file_path = DISEASE_JOBS_DIR / f"{job_id}.json"
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, default=str)
+
+def _load_disease_job_file(job_id: str) -> Optional[dict]:
+    file_path = DISEASE_JOBS_DIR / f"{job_id}.json"
+    if file_path.exists():
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return None
+    return None
+
+@app.post("/api/v1/predict/disease/async", status_code=202)
+async def api_predict_disease_async(
+    crop: str = Form(...),
+    image: UploadFile = File(...),
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
+    req_id = str(uuid.uuid4())[:8]
+    job_id = f"job_{req_id}"
+    user_id = current_user.id if current_user else None
+    
+    raw = await image.read()
+    content_type = (image.content_type or "image/jpeg").lower()
+
+    # Pre-validate file upload
+    try:
+        from App.backend.disease_detection import _validate_upload
+        _validate_upload(raw, content_type)
+    except ValueError as val_err:
+        return make_error_response(400, "disease", "INVALID_FILE_UPLOAD", str(val_err), retryable=False)
+
+    job_data = {
+        "job_id": job_id,
+        "request_id": req_id,
+        "crop": crop,
+        "filename": image.filename or "image.jpg",
+        "status": "queued",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "result": None,
+        "error": None,
+    }
+    _save_disease_job_file(job_id, job_data)
+
+    async def _process_job():
+        job_data["status"] = "running"
+        _save_disease_job_file(job_id, job_data)
+        try:
+            res = await run_in_threadpool(
+                predict_disease_and_pests,
+                crop=crop, raw=raw, filename=image.filename or "image.jpg", content_type=content_type, request_id=req_id
+            )
+            job_data["status"] = "completed"
+            job_data["result"] = res
+            _save_disease_job_file(job_id, job_data)
+        except Exception as exc:
+            job_data["status"] = "failed"
+            job_data["error"] = str(exc)
+            _save_disease_job_file(job_id, job_data)
+
+    asyncio.create_task(_process_job())
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "request_id": req_id,
+        "status": "queued",
+        "message": "Disease diagnosis job accepted and queued for processing.",
+        "poll_interval_ms": 2000,
+        "status_url": f"/api/v1/predict/disease/job/{job_id}",
+    }
+
+
+@app.get("/api/v1/predict/disease/job/{job_id}")
+async def api_get_disease_job(job_id: str):
+    job_data = _load_disease_job_file(job_id)
+    if not job_data:
+        return make_error_response(404, "disease", "JOB_NOT_FOUND", f"Disease diagnosis job '{job_id}' not found.", retryable=False)
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": job_data.get("status", "unknown"),
+        "created_at": job_data.get("created_at"),
+        "result": job_data.get("result"),
+        "error": job_data.get("error"),
+    }
+
+
 
 # 6b. Universal Agriculture & Scheme Agent Query API
 @app.post("/api/v1/agent/query")

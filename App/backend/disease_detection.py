@@ -947,21 +947,16 @@ def predict_disease_and_pests(
         "selected_pest_result": top_pest,
         "selected_nutrient_result": top_nutrient,
         "other_possible_detections": other_possible_detections[:5],
+        "symptom_checklist": rag_remedies.get("symptom_checklist") if (isinstance(rag_remedies, dict) and rag_remedies) else [],
+        "symptom_checklist_notice": rag_remedies.get("symptom_checklist_notice") if (isinstance(rag_remedies, dict) and rag_remedies) else "No verified symptom reference available",
+        "has_verified_symptoms": rag_remedies.get("has_verified_symptoms", False) if (isinstance(rag_remedies, dict) and rag_remedies) else False,
         "rag_remedies": rag_remedies,
         "raw_model_predictions": {"crop_models": crop_runs, "pest_models": pest_runs, "nutrient_models": nutrient_runs},
     }
 
-    if supabase:
-        try:
-            supabase.table("crop_predictions").insert(json_safe(output)).execute()
-        except Exception:
-            try:
-                supabase.table("crop_prediction").insert(json_safe(output)).execute()
-            except Exception:
-                pass
-    telemetry_persist_ms = round((time.time() - t_db_start) * 1000, 2)
-    stage_timings_ms["telemetry_persist_ms"] = telemetry_persist_ms
-    stage_timings_ms["total_latency_ms"] = round((time.time() - t_start) * 1000, 2)
+    total_latency_ms = round((time.time() - t_start) * 1000, 2)
+    stage_timings_ms["telemetry_persist_ms"] = 0.0
+    stage_timings_ms["total_latency_ms"] = total_latency_ms
 
     return output
 
