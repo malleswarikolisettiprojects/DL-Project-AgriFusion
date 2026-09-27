@@ -1129,9 +1129,10 @@ async def api_predict_disease_async(
     current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
 ):
     req_id = str(uuid.uuid4())[:8]
+    secret_token = str(uuid.uuid4())
     job_id = f"job_{req_id}"
     user_id = current_user.id if current_user else None
-    
+
     raw = await image.read()
     content_type = (image.content_type or "image/jpeg").lower()
 
@@ -1147,6 +1148,9 @@ async def api_predict_disease_async(
         "request_id": req_id,
         "crop": crop,
         "filename": image.filename or "image.jpg",
+        "user_id": user_id,
+        "secret_token": secret_token,
+        "queue_type": "best_effort_in_process",
         "status": "queued",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "result": None,
@@ -1176,21 +1180,50 @@ async def api_predict_disease_async(
         "success": True,
         "job_id": job_id,
         "request_id": req_id,
+        "secret_token": secret_token,
+        "queue_type": "best_effort_in_process",
+        "durability_notice": "This endpoint uses best-effort in-process task execution without process-restart recovery. Use synchronous /api/v1/predict/disease for production reliability.",
         "status": "queued",
-        "message": "Disease diagnosis job accepted and queued for processing.",
+        "message": "Disease diagnosis job accepted for best-effort processing.",
         "poll_interval_ms": 2000,
-        "status_url": f"/api/v1/predict/disease/job/{job_id}",
+        "status_url": f"/api/v1/predict/disease/job/{job_id}?token={secret_token}",
     }
 
 
 @app.get("/api/v1/predict/disease/job/{job_id}")
-async def api_get_disease_job(job_id: str):
+async def api_get_disease_job(
+    job_id: str,
+    token: Optional[str] = Query(None),
+    current_user: Optional[CurrentUser] = Depends(get_optional_current_user),
+):
     job_data = _load_disease_job_file(job_id)
     if not job_data:
         return make_error_response(404, "disease", "JOB_NOT_FOUND", f"Disease diagnosis job '{job_id}' not found.", retryable=False)
+
+    # Ownership and token authorization checks
+    job_user_id = job_data.get("user_id")
+    secret_token = job_data.get("secret_token")
+
+    authorized = False
+    if current_user:
+        if job_user_id and current_user.id == job_user_id:
+            authorized = True
+        elif getattr(current_user, "role", None) in ("admin", "agronomist"):
+            authorized = True
+    if not authorized and secret_token and token and token == secret_token:
+        authorized = True
+
+    # If job was created without user_id or token in legacy data, allow owner check
+    if not job_user_id and not secret_token:
+        authorized = True
+
+    if not authorized:
+        return make_error_response(403, "disease", "UNAUTHORIZED_JOB_ACCESS", "You are not authorized to view this job result.", retryable=False)
+
     return {
         "success": True,
         "job_id": job_id,
+        "queue_type": job_data.get("queue_type", "best_effort_in_process"),
         "status": job_data.get("status", "unknown"),
         "created_at": job_data.get("created_at"),
         "result": job_data.get("result"),

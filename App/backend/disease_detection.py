@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw
 # ultralytics / YOLO is optional — loaded lazily if run_local is invoked
 _model_cache = {}
 
-from App.backend.agronomy_rag import generate_rag_remedies
+from App.backend.agronomy_rag import generate_rag_remedies, get_symptom_checklist
 from App.backend.settings import ROBOFLOW_API_KEY, HF_TOKEN, SUPABASE_BUCKET, create_supabase_client
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -804,11 +804,15 @@ def predict_disease_and_pests(
             rag_remedies = None
             healthy_msg = "Crop appears healthy based on visual AI analysis."
             notice_text = f"{custom_crop_notice} {healthy_msg}" if custom_crop_notice else healthy_msg
-        else:
             rag_exec = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             try:
                 rag_fut = rag_exec.submit(generate_rag_remedies, primary_label, crop=crop)
                 rag_remedies = rag_fut.result(timeout=1.5)
+                if not rag_remedies and top_crop and top_crop.get("detection", {}).get("label"):
+                    crop_lbl = top_crop["detection"]["label"]
+                    if crop_lbl != primary_label:
+                        rag_fut_crop = rag_exec.submit(generate_rag_remedies, crop_lbl, crop=crop)
+                        rag_remedies = rag_fut_crop.result(timeout=1.0)
             except concurrent.futures.TimeoutError:
                 print(f"[{req_id}] RAG remedies generation timed out (>1.5s) - proceeding without remedies")
                 rag_remedies = None
@@ -923,6 +927,31 @@ def predict_disease_and_pests(
         "stage_timings_ms": stage_timings_ms,
     }
 
+    final_symptoms = []
+    final_symptoms_notice = "No verified symptom reference available"
+    has_verified = False
+
+    if isinstance(rag_remedies, dict) and rag_remedies.get("has_verified_symptoms"):
+        final_symptoms = rag_remedies.get("symptom_checklist", [])
+        final_symptoms_notice = rag_remedies.get("symptom_checklist_notice")
+        has_verified = True
+    else:
+        candidate_labels = []
+        if primary_label:
+            candidate_labels.append(primary_label)
+        if top_crop and top_crop.get("detection", {}).get("label"):
+            candidate_labels.append(top_crop["detection"]["label"])
+        if top_pest and top_pest.get("detection", {}).get("label"):
+            candidate_labels.append(top_pest["detection"]["label"])
+
+        for cand in candidate_labels:
+            chk = get_symptom_checklist(cand, crop=crop)
+            if chk and chk.get("has_verified_symptoms"):
+                final_symptoms = chk.get("symptom_checklist", [])
+                final_symptoms_notice = chk.get("symptom_checklist_notice")
+                has_verified = True
+                break
+
     output = {
         "id": prediction_id,
         "request_id": req_id,
@@ -947,9 +976,9 @@ def predict_disease_and_pests(
         "selected_pest_result": top_pest,
         "selected_nutrient_result": top_nutrient,
         "other_possible_detections": other_possible_detections[:5],
-        "symptom_checklist": rag_remedies.get("symptom_checklist") if (isinstance(rag_remedies, dict) and rag_remedies) else [],
-        "symptom_checklist_notice": rag_remedies.get("symptom_checklist_notice") if (isinstance(rag_remedies, dict) and rag_remedies) else "No verified symptom reference available",
-        "has_verified_symptoms": rag_remedies.get("has_verified_symptoms", False) if (isinstance(rag_remedies, dict) and rag_remedies) else False,
+        "symptom_checklist": final_symptoms,
+        "symptom_checklist_notice": final_symptoms_notice,
+        "has_verified_symptoms": has_verified,
         "rag_remedies": rag_remedies,
         "raw_model_predictions": {"crop_models": crop_runs, "pest_models": pest_runs, "nutrient_models": nutrient_runs},
     }
