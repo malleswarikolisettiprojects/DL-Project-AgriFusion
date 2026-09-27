@@ -309,3 +309,190 @@ def test_inference_stored_row_admin_response_agreement():
     assert admin_item["request_id"] == "test-req-123"
     assert admin_item["actor_ref"] == "test-user-456"
 
+
+def test_missing_credentials_handling():
+    """11. Test missing credentials resulting in status='skipped' and failure_class='missing_or_invalid_credential'."""
+    from App.backend.disease_detection import run_roboflow, run_huggingface
+
+    raw = create_test_image_bytes()
+    with patch("App.backend.disease_detection.ROBOFLOW_API_KEY", None):
+        res_rf = run_roboflow({"model_id": "test/1"}, raw, "image/jpeg")
+        assert res_rf["status"] == "skipped"
+        assert res_rf["failure_class"] == "missing_or_invalid_credential"
+        assert res_rf["http_status"] is None
+
+    with patch("App.backend.disease_detection.HF_TOKEN", None):
+        res_hf = run_huggingface({"model_id": "test/model"}, raw, "image/jpeg")
+        assert res_hf["status"] == "skipped"
+        assert res_hf["failure_class"] == "missing_or_invalid_credential"
+        assert res_hf["http_status"] is None
+
+
+def test_provider_http_error_classes():
+    """12. Test provider HTTP error classifications: 401, 404, and 503."""
+    from App.backend.disease_detection import run_roboflow, run_huggingface
+    import httpx
+
+    raw = create_test_image_bytes()
+    cfg_rf = {"model_id": "test-rf/1"}
+    cfg_hf = {"model_id": "test-hf/model"}
+
+    # 401 Unauthorized
+    mock_resp_401 = MagicMock()
+    mock_resp_401.status_code = 401
+    with patch("App.backend.disease_detection.ROBOFLOW_API_KEY", "dummy_key"):
+        with patch("httpx.post", return_value=mock_resp_401):
+            rf_401 = run_roboflow(cfg_rf, raw, "image/jpeg")
+            assert rf_401["status"] == "error"
+            assert rf_401["http_status"] == 401
+            assert rf_401["failure_class"] == "missing_or_invalid_credential"
+
+    # 404 Not Found
+    mock_resp_404 = MagicMock()
+    mock_resp_404.status_code = 404
+    with patch("App.backend.disease_detection.HF_TOKEN", "dummy_token"):
+        with patch("httpx.post", return_value=mock_resp_404):
+            hf_404 = run_huggingface(cfg_hf, raw, "image/jpeg")
+            assert hf_404["status"] == "error"
+            assert hf_404["http_status"] == 404
+            assert hf_404["failure_class"] == "invalid_model_id"
+
+    # 503 Service Unavailable
+    mock_resp_503 = MagicMock()
+    mock_resp_503.status_code = 503
+    with patch("App.backend.disease_detection.ROBOFLOW_API_KEY", "dummy_key"):
+        with patch("httpx.post", return_value=mock_resp_503):
+            rf_503 = run_roboflow(cfg_rf, raw, "image/jpeg")
+            assert rf_503["status"] == "error"
+            assert rf_503["http_status"] == 503
+            assert rf_503["failure_class"] == "provider_unavailable"
+
+
+def test_provider_timeout_class():
+    """13. Test provider timeout handling mapping to failure_class='timeout'."""
+    from App.backend.disease_detection import run_roboflow, run_huggingface
+    import httpx
+
+    raw = create_test_image_bytes()
+    cfg_rf = {"model_id": "test-rf/1"}
+
+    with patch("App.backend.disease_detection.ROBOFLOW_API_KEY", "dummy_key"):
+        with patch("httpx.post", side_effect=httpx.TimeoutException("Timeout")):
+            res = run_roboflow(cfg_rf, raw, "image/jpeg")
+            assert res["status"] == "timeout"
+            assert res["failure_class"] == "timeout"
+            assert res["http_status"] is None
+
+
+def test_one_provider_success_detected():
+    """14. Test case where 1 provider succeeds with qualifying candidate while others fail."""
+    raw = create_test_image_bytes()
+
+    def mock_run_prov(cfg, img, raw_b, ct):
+        if cfg.get("name") == "pests-wropv":
+            return {
+                "provider": "roboflow",
+                "model": "pests-wropv/3",
+                "status": "ok",
+                "http_status": 200,
+                "failure_class": None,
+                "latency_ms": 150.0,
+                "detections": [{"label": "Rice_Bacterial_blight", "confidence": 0.85, "box_xyxy": [0,0,10,10]}],
+                "top_confidence": 0.85,
+            }
+        return {
+            "provider": cfg.get("provider", "roboflow"),
+            "model": cfg.get("model_id", cfg.get("name", "")),
+            "status": "error",
+            "http_status": 401,
+            "failure_class": "missing_or_invalid_credential",
+            "latency_ms": 100.0,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    with patch("App.backend.disease_detection.run_provider", side_effect=mock_run_prov):
+        with patch("App.backend.disease_detection.generate_rag_remedies", return_value=None):
+            res = predict_disease_and_pests(crop="rice", raw=raw)
+
+            assert res["inference_outcome"] == "detected"
+            assert res["primary_diagnosis"] == "Rice_Bacterial_blight"
+            assert res["execution_status"] == "success"
+            assert res["providers_summary"]["succeeded"] == 1
+            assert res["providers_summary"]["failed"] == len(res["providers_summary"]["details"]) - 1
+
+
+def test_one_provider_success_zero_candidates():
+    """15. Test case where 1 provider succeeds but finds 0 candidate detections (no_detection)."""
+    raw = create_test_image_bytes()
+
+    def mock_run_prov(cfg, img, raw_b, ct):
+        if cfg.get("name") == "pests-wropv":
+            return {
+                "provider": "roboflow",
+                "model": "pests-wropv/3",
+                "status": "ok",
+                "http_status": 200,
+                "failure_class": None,
+                "latency_ms": 150.0,
+                "detections": [],
+                "top_confidence": 0.0,
+            }
+        return {
+            "provider": cfg.get("provider", "huggingface"),
+            "model": cfg.get("model_id", cfg.get("name", "")),
+            "status": "error",
+            "http_status": 401,
+            "failure_class": "missing_or_invalid_credential",
+            "latency_ms": 100.0,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    with patch("App.backend.disease_detection.run_provider", side_effect=mock_run_prov):
+        res = predict_disease_and_pests(crop="rice", raw=raw)
+
+        assert res["inference_outcome"] == "no_detection"
+        assert res["primary_diagnosis"] is None
+        assert res["execution_status"] == "success"
+        assert res["providers_summary"]["succeeded"] == 1
+
+
+def test_sanitized_per_provider_details_structure():
+    """16. Test that providers_summary['details'] includes clean per-provider entries with no secret leakage."""
+    raw = create_test_image_bytes()
+    mock_run = {
+        "provider": "roboflow",
+        "model": "rice-leaf-disease/1",
+        "status": "ok",
+        "http_status": 200,
+        "failure_class": None,
+        "latency_ms": 123.45,
+        "detections": [],
+        "top_confidence": 0.0
+    }
+
+    with patch("App.backend.disease_detection.run_provider", return_value=mock_run):
+        res = predict_disease_and_pests(crop="rice", raw=raw)
+
+        assert "details" in res["providers_summary"]
+        details = res["providers_summary"]["details"]
+        assert len(details) > 0
+
+        for entry in details:
+            assert "provider" in entry
+            assert "model" in entry
+            assert "status" in entry
+            assert "http_status" in entry
+            assert "failure_class" in entry
+            assert "latency_ms" in entry
+            assert "detections_count" in entry
+            assert "top_confidence" in entry
+
+        # Verify no secret tokens or image payloads leaked in output
+        dump_str = str(res)
+        assert "ROBOFLOW_API_KEY" not in dump_str
+        assert "HF_TOKEN" not in dump_str
+        assert "Authorization" not in dump_str
+
+

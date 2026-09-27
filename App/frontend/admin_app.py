@@ -609,8 +609,8 @@ elif menu == "💬 Farmer Feedback & Support":
 # =============================================================================
 # MODULE 9: CROP DIAGNOSTICS AUDIT & REVIEW
 # =============================================================================
-elif menu == "🔬 Crop Diagnostics Audit":
-    st.header("🔬 Crop Health Diagnostics Audit & Review")
+elif menu == "\U0001f52c Crop Diagnostics Audit":
+    st.header("\U0001f52c Crop Health Diagnostics Audit & Review")
 
     d_col1, d_col2, d_col3, d_col4, d_col5 = st.columns(5)
     with d_col1:
@@ -636,8 +636,170 @@ elif menu == "🔬 Crop Diagnostics Audit":
     if diag_search_input.strip():
         params["search"] = diag_search_input.strip()
 
+    # -- Helper: render disease-specific RAG guidance from backend rag_remedies --
+    def _render_rag_guidance(rag):
+        """
+        Renders 'Suggested next steps' and 'Where this guidance comes from' using
+        real rag_remedies fields from the backend. No hardcoded advice is inserted.
+
+        source_type values (set by backend):
+          "verified_public_document"  - matched from a verified external URL
+          "knowledge_base_document"   - matched from a local agronomy_docs file
+          "baseline_only"             - built-in BASELINE_REMEDIES; not source-verified
+          "no_match" / absent         - no source matched
+        """
+        rag_status = rag.get("rag_status", "")
+        source_type = rag.get("source_type", "")
+        notice = rag.get("notice") or ""
+
+        # Req 5: no_verified_match or missing source -- show notice only, no treatment advice
+        if rag_status == "no_verified_match":
+            st.warning(
+                "**No verified source matched this condition.**\n\n"
+                + (notice or "No verified agronomic document matched this query. "
+                   "Please consult your local Agriculture Officer or Krishi Vigyan Kendra (KVK).")
+            )
+            return
+
+        # -- Req 1: Suggested next steps ----------------------------------------
+        st.markdown("---")
+        st.markdown("### Suggested Next Steps")
+
+        # Sentinel text emitted by backend when advice is not available from a verified source
+        _NO_ADVICE_MARKERS = ("not available", "consult your local")
+
+        def _has_real_advice(text):
+            if not text:
+                return False
+            t = text.lower()
+            return not any(m in t for m in _NO_ADVICE_MARKERS)
+
+        cultural   = rag.get("cultural_practices", "")
+        organic    = rag.get("organic_bio_control", "")
+        chemical   = rag.get("chemical_treatment", "")
+        fertilizer = rag.get("fertilizer_advice", "")
+
+        guidance_shown = False
+
+        if _has_real_advice(cultural):
+            with st.expander("Cultural Practices", expanded=True):
+                st.markdown(cultural)
+            guidance_shown = True
+
+        if _has_real_advice(organic):
+            with st.expander("Organic / Biological Options", expanded=True):
+                st.markdown(organic)
+            guidance_shown = True
+
+        if _has_real_advice(chemical):
+            with st.expander("Chemical Treatment"):
+                st.markdown(chemical)
+                if source_type == "baseline_only":
+                    st.caption(
+                        "This suggestion comes from the built-in advisory baseline, not a retrieved "
+                        "published source. Confirm dosage and product registration with a licensed "
+                        "agronomist or Agriculture Officer before applying."
+                    )
+            guidance_shown = True
+
+        if _has_real_advice(fertilizer):
+            with st.expander("Fertilizer Advice"):
+                st.markdown(fertilizer)
+                if source_type == "baseline_only":
+                    st.caption(
+                        "Fertilizer suggestion from the built-in baseline. Verify with a soil test "
+                        "or Agriculture Officer."
+                    )
+            guidance_shown = True
+
+        if not guidance_shown:
+            st.info(
+                "No specific next-step guidance was available from a verified source for this condition. "
+                "Consult your local Agriculture Officer or KVK agronomist."
+            )
+
+        # -- Req 2 & 3: Source attribution ----------------------------------------
+        st.markdown("---")
+        st.markdown("### Where This Guidance Comes From")
+
+        source_title = rag.get("source_title")
+        source_url   = rag.get("source_url")   # already validated as public http(s) by backend
+        source_inst  = rag.get("source_institute")
+
+        if source_type == "verified_public_document":
+            st.success("Verified public document -- retrieved above the relevance threshold.")
+            if source_title:
+                st.write(f"**Document:** {source_title}")
+            if source_inst:
+                st.write(f"**Institution:** {source_inst}")
+            # Req 2: Show link only when backend provided a valid public URL
+            if source_url and source_url.startswith("http"):
+                st.markdown(f"[View source document]({source_url})")
+            else:
+                st.caption("(No public URL was provided for this document.)")
+
+        elif source_type == "knowledge_base_document":
+            # Req 3: internal document -- no link, no path exposure
+            st.info("Knowledge-base document -- internal AgriFusion document library.")
+            if source_title:
+                st.write(f"**Document:** {source_title}")
+            if source_inst:
+                st.write(f"**Indexed by:** {source_inst}")
+            st.caption("This is an internal knowledge-base document. No public URL is available.")
+
+        elif source_type == "baseline_only":
+            st.warning(
+                "Built-in advisory baseline -- no independently verified published source was retrieved "
+                "for this specific condition. The guidance shown is from the AgriFusion built-in baseline "
+                "and has not been attributed to a specific retrieved publication."
+            )
+            if notice:
+                st.caption(notice)
+
+        else:
+            # Unknown or missing source_type -- warn clearly
+            st.warning(
+                "Source provenance could not be determined. Treat all guidance with caution and verify "
+                "with an Agriculture Officer before taking any action."
+            )
+
+        # Req 2: Show retrieved passage when an actual document was matched
+        doc_passage = rag.get("document_passage")
+        if doc_passage and source_type in ("verified_public_document", "knowledge_base_document"):
+            with st.expander("Retrieved Passage (excerpt from matched document)"):
+                st.caption(doc_passage)
+
+        # Req 4: Additional passages from real document hits
+        retrieved = rag.get("retrieved_document_passages") or []
+        if retrieved and source_type == "verified_public_document":
+            with st.expander(f"Additional Retrieved Passages ({len(retrieved)})"):
+                for i, p in enumerate(retrieved, 1):
+                    p_title = p.get("source") or "Unnamed document"
+                    p_url   = p.get("url")
+                    p_inst  = p.get("institute") or ""
+                    p_score = p.get("score", 0.0)
+                    st.markdown(f"**{i}. {p_title}** -- *{p_inst}* (relevance score: {p_score:.3f})")
+                    # Only link when backend confirmed retrieval from a public URL
+                    if p_url and p_url.startswith("http"):
+                        st.markdown(f"[Source URL]({p_url})")
+                    st.caption(p.get("text", ""))
+                    st.markdown("---")
+
+        # Local KB snippets -- no internal path exposure
+        local_snippets = rag.get("local_file_snippets") or []
+        if local_snippets and source_type == "knowledge_base_document":
+            with st.expander("Matched Knowledge-Base Excerpt"):
+                for snip in local_snippets:
+                    st.caption(snip)
+
+    # -- Main diagnostics listing ------------------------------------------------
     try:
-        diag_res = requests.get(f"{API_BASE_URL}/api/v1/admin/diagnostics", headers=get_headers(), params=params, timeout=10)
+        diag_res = requests.get(
+            f"{API_BASE_URL}/api/v1/admin/diagnostics",
+            headers=get_headers(),
+            params=params,
+            timeout=10,
+        )
         if diag_res.status_code == 200:
             diag_data = diag_res.json()
             items = diag_data.get("items", [])
@@ -645,8 +807,7 @@ elif menu == "🔬 Crop Diagnostics Audit":
 
             if items:
                 for diag in items:
-                    outcome = diag.get("inference_outcome")
-                    # Do NOT substitute a default: None means this row pre-dates telemetry columns.
+                    outcome   = diag.get("inference_outcome")
                     exec_stat = diag.get("execution_status")  # May be None for legacy rows
 
                     if diag.get("primary_diagnosis"):
@@ -661,23 +822,38 @@ elif menu == "🔬 Crop Diagnostics Audit":
                         diag_title = "Inconclusive"
 
                     conf = diag.get("confidence")
-                    conf_str = f"{round(conf * 100, 1)}% confidence" if conf is not None else "Confidence N/A"
-                    badge_outcome = outcome.upper() if outcome else "UNSPECIFIED"
+                    # Req 7: use "model score", NOT "confidence probability of disease"
+                    conf_str = f"model score {round(conf * 100, 1)}%" if conf is not None else "Score N/A"
+                    badge_outcome     = outcome.upper() if outcome else "UNSPECIFIED"
                     exec_stat_display = exec_stat if exec_stat is not None else "Not recorded"
-                    expander_header = f"🔬 {diag_title} on {diag.get('crop')} ({conf_str}) — Outcome: `{badge_outcome}` [{exec_stat_display}]"
+                    expander_header   = (
+                        f"\U0001f52c {diag_title} on {diag.get('crop')} ({conf_str}) "
+                        f"-- Outcome: `{badge_outcome}` [{exec_stat_display}]"
+                    )
 
                     with st.expander(expander_header):
-                        st.write(f"**Report ID:** `{diag.get('id')}` | **Request ID:** `{diag.get('request_id') or 'N/A'}` | **Date:** `{diag.get('created_at')}`")
-                        exec_stat_display = exec_stat if exec_stat is not None else "Not recorded"
-                        st.write(f"**Inference Outcome:** `{outcome}` | **Execution Status:** `{exec_stat_display}` | **Review Status:** `{diag.get('status') or 'pending_review'}`")
-                        st.write(f"**Location:** {diag.get('district') or 'N/A'}, {diag.get('state') or 'N/A'} | **Actor Ref:** `{diag.get('actor_ref') or 'Anonymous'}`")
+                        st.write(
+                            f"**Report ID:** `{diag.get('id')}` | "
+                            f"**Request ID:** `{diag.get('request_id') or 'N/A'}` | "
+                            f"**Date:** `{diag.get('created_at')}`"
+                        )
+                        st.write(
+                            f"**Inference Outcome:** `{outcome}` | "
+                            f"**Execution Status:** `{exec_stat_display}` | "
+                            f"**Review Status:** `{diag.get('status') or 'pending_review'}`"
+                        )
+                        st.write(
+                            f"**Location:** {diag.get('district') or 'N/A'}, "
+                            f"{diag.get('state') or 'N/A'} | "
+                            f"**Actor Ref:** `{diag.get('actor_ref') or 'Anonymous'}`"
+                        )
 
                         col_prov, col_cand = st.columns(2)
                         with col_prov:
-                            st.markdown("##### ⚙️ Providers Summary")
+                            st.markdown("##### Providers Summary")
                             st.json(diag.get("providers_summary") or {})
                         with col_cand:
-                            st.markdown("##### 🎯 Candidate & Threshold Summary")
+                            st.markdown("##### Candidate & Threshold Summary")
                             st.json(diag.get("candidate_summary") or {})
 
                         sec_list = diag.get("secondary_matches") or []
@@ -685,22 +861,74 @@ elif menu == "🔬 Crop Diagnostics Audit":
                             st.write("**Secondary Detections / Matches:**")
                             for sec in sec_list:
                                 if isinstance(sec, dict):
-                                    s_conf = f" ({round(sec['confidence']*100, 1)}%)" if sec.get("confidence") is not None else ""
-                                    st.write(f"- **{sec.get('label')}**{s_conf} — *{sec.get('category') or sec.get('source') or 'secondary'}*")
+                                    s_conf = (
+                                        f" ({round(sec['confidence']*100, 1)}%)"
+                                        if sec.get("confidence") is not None else ""
+                                    )
+                                    st.write(
+                                        f"- **{sec.get('label')}**{s_conf} -- "
+                                        f"*{sec.get('category') or sec.get('source') or 'secondary'}*"
+                                    )
                                 else:
                                     st.write(f"- {sec}")
+
+                        # -- Req 1-5: Guidance only for confirmed detections ---------------
+                        if outcome == "detected":
+                            rag = diag.get("rag_remedies")
+                            if isinstance(rag, dict) and rag:
+                                _render_rag_guidance(rag)
+                            else:
+                                st.markdown("---")
+                                st.info("No guidance data was returned for this diagnostic record.")
+
+                        # -- Req 6: Safe next steps for non-detection outcomes -------------
+                        elif outcome in ("low_confidence", "no_detection", "provider_error"):
+                            st.markdown("---")
+                            st.markdown("### Safe Next Steps")
+                            if outcome == "low_confidence":
+                                st.warning(
+                                    "**Low confidence result** -- the visual model detected a pattern "
+                                    "but the score is below the required threshold. Do **not** apply "
+                                    "treatments based on this result alone."
+                                )
+                            elif outcome == "no_detection":
+                                st.info(
+                                    "**No disease or pest detected** by visual analysis. If symptoms "
+                                    "are visible in the field, this may be a false negative -- inspect "
+                                    "with a qualified agronomist."
+                                )
+                            elif outcome == "provider_error":
+                                st.error(
+                                    "**Inference engine error or timeout** -- automated visual analysis "
+                                    "could not be completed."
+                                )
+                            st.markdown(
+                                "**Recommended actions:**\n"
+                                "1. Re-take a clear, well-lit photograph of the affected leaf or "
+                                "plant part and resubmit.\n"
+                                "2. Consult your local **Agriculture Officer** or **Krishi Vigyan "
+                                "Kendra (KVK) agronomist** for an in-person assessment.\n"
+                                "3. Call the Kisan Call Centre: **1800-180-1551** (Toll-Free) "
+                                "for immediate guidance.\n"
+                                "4. Request a physical plant tissue or soil sample test if symptoms "
+                                "persist."
+                            )
+
                         st.caption(diag_data.get("privacy_note", ""))
             else:
                 st.info("No diagnostic records match the selected filters.")
         elif diag_res.status_code == 401:
-            st.error("🔒 Authentication Error (401): Session expired or invalid admin token. Please sign in again.")
+            st.error("Authentication Error (401): Session expired or invalid admin token. Please sign in again.")
         elif diag_res.status_code == 403:
-            st.error("🚫 Access Forbidden (403): You do not have administrator permissions to access diagnostic reports.")
+            st.error("Access Forbidden (403): You do not have administrator permissions to access diagnostic reports.")
         elif diag_res.status_code == 500:
-            st.error("💥 Server Error (HTTP 500): Database query failed for diagnostic reports. The backend failed closed instead of returning a false empty list.")
+            st.error(
+                "Server Error (HTTP 500): Database query failed for diagnostic reports. "
+                "The backend failed closed instead of returning a false empty list."
+            )
         else:
             st.error(f"Failed to fetch diagnostic reports (HTTP {diag_res.status_code}): {diag_res.text}")
     except requests.exceptions.Timeout:
-        st.error("⏳ Network Timeout: Request to fetch diagnostic reports timed out.")
+        st.error("Network Timeout: Request to fetch diagnostic reports timed out.")
     except Exception as err:
-        st.error(f"🌐 Connection Error: Could not reach backend API server ({err})")
+        st.error(f"Connection Error: Could not reach backend API server ({err})")

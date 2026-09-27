@@ -337,6 +337,13 @@ def chunk_local_documents(docs: List[Dict[str, Any]], chunk_words: int = 250, ov
 RAG_RELEVANCE_THRESHOLD = float(os.getenv("RAG_RELEVANCE_THRESHOLD", "0.15"))
 
 
+def _is_valid_public_url(url: Optional[str]) -> bool:
+    """Returns True only if the URL starts with http:// or https://."""
+    if not url:
+        return False
+    return url.startswith("http://") or url.startswith("https://")
+
+
 def _no_verified_match_response(query_label: str, crop: str) -> Dict[str, Any]:
     """
     Returned when no verified source meets the relevance threshold.
@@ -354,6 +361,8 @@ def _no_verified_match_response(query_label: str, crop: str) -> Dict[str, Any]:
         "cultural_practices": _NO_DOSE,
         "fertilizer_advice": _NO_DOSE,
         "rag_status": "no_verified_match",
+        # Provenance — explicit sentinel so UI knows this is unverified
+        "source_type": "no_match",
         "source_title": None,
         "source_url": None,
         "source_institute": None,
@@ -471,8 +480,9 @@ def generate_rag_remedies(query_label: str, crop: str = "crop") -> Dict[str, Any
             doc_passage = doc_passage[:600].rsplit(" ", 1)[0] + " ..."
         remedy_source = "local_pdf_doc"
         source_title = f"Local Document: {best_loc['title']}"
-        # Strip file:// internal paths from responses
-        source_url = best_loc.get("url", "").replace("file://", "") or None
+        # Never expose internal filesystem paths (file:// scheme or absolute paths)
+        _raw_url = best_loc.get("url", "")
+        source_url = _raw_url if _is_valid_public_url(_raw_url) else None
         source_institute = best_loc["institute"]
         relevance = 0.8
     else:
@@ -502,6 +512,43 @@ def generate_rag_remedies(query_label: str, crop: str = "crop") -> Dict[str, Any
 
     all_reference_links = get_source_metadata() if REAL_DOC_RAG_OK else AGRONOMY_DOCUMENT_LINKS
 
+    # Determine the canonical source_type for provenance labelling
+    # source_type values:
+    #   "verified_public_document"  — retrieved from a verified external URL (TNAU, ICAR, FAO, etc.)
+    #   "knowledge_base_document"   — retrieved from a local agronomy_docs file (no public URL)
+    #   "baseline_only"             — built-in BASELINE_REMEDIES dictionary; not source-verified
+    #   "no_match"                  — no source matched above threshold
+    if remedy_source == "real_document":
+        source_type = "verified_public_document"
+    elif remedy_source == "local_pdf_doc":
+        source_type = "knowledge_base_document"
+    elif matched_baseline:
+        source_type = "baseline_only"
+    else:
+        source_type = "no_match"
+
+    # Build the notice message for positive matches
+    if source_type == "verified_public_document":
+        _notice = (
+            f"Guidance retrieved from a verified public document: '{source_title}' "
+            f"({source_institute}). Always consult a qualified agronomist before applying treatments."
+        )
+    elif source_type == "knowledge_base_document":
+        _notice = (
+            f"Guidance sourced from an internal knowledge-base document: '{source_title}' "
+            f"({source_institute}). Consult your local Agriculture Officer or KVK for site-specific advice."
+        )
+    else:  # baseline_only
+        _notice = (
+            "Guidance is from the AgriFusion built-in advisory baseline. "
+            "No independently verified published source was retrieved for this specific condition. "
+            "Consult your local Agriculture Officer, Krishi Vigyan Kendra (KVK), or ICAR extension services "
+            "before applying any chemical treatments."
+        )
+
+    # Ensure source_url is only set for valid public URLs
+    safe_source_url = source_url if _is_valid_public_url(source_url) else None
+
     return {
         "target_condition": query_label,
         "crop": crop,
@@ -512,15 +559,17 @@ def generate_rag_remedies(query_label: str, crop: str = "crop") -> Dict[str, Any
         "cultural_practices": cultural,
         "fertilizer_advice": fert,
         "rag_status": remedy_source,
+        # Explicit provenance fields
+        "source_type": source_type,
         "source_title": source_title,
-        "source_url": source_url,
+        "source_url": safe_source_url,
         "source_institute": source_institute,
         "relevance_score": relevance,
         "retrieved_document_passages": [
             {
                 "text": h["text"][:400],
                 "source": h["title"],
-                "url": h["url"],
+                "url": h["url"] if _is_valid_public_url(h.get("url")) else None,
                 "institute": h["institute"],
                 "score": round(h.get("relevance_score", 0.0), 3),
             }
@@ -528,6 +577,7 @@ def generate_rag_remedies(query_label: str, crop: str = "crop") -> Dict[str, Any
         ],
         "local_file_snippets": local_snippets[:3],
         "reference_document_links": all_reference_links,
+        "notice": _notice,
     }
 
 

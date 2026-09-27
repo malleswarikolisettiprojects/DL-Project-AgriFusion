@@ -277,7 +277,7 @@ class TestServerHealth:
         client = TestClient(app)
         data = client.get("/health").json()
         for key, value in data.items():
-            if key != "timestamp" and key != "status":
+            if key not in ("timestamp", "status", "deployed_commit"):
                 assert isinstance(value, bool), (
                     f"Health endpoint key '{key}' returned {type(value).__name__}, expected bool"
                 )

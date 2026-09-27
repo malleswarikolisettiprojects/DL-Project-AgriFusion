@@ -2,6 +2,7 @@ import base64
 import io
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -175,11 +176,22 @@ def normalize_detections(items: list[dict[str, Any]], source: str) -> list[dict[
 
 
 def run_local(config: dict[str, str], image: Image.Image) -> dict[str, Any]:
+    t0 = time.time()
     try:
         from ultralytics import YOLO
     except ImportError:
-        return {"provider": "local", "model": config.get("name", ""), "status": "skipped",
-                "error": "ultralytics not installed", "detections": [], "top_confidence": 0.0}
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "local",
+            "model": config.get("name", ""),
+            "status": "skipped",
+            "http_status": None,
+            "failure_class": "missing_dependency",
+            "error": "ultralytics not installed",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
 
     path = MODELS_DIR / config["path"]
     if not path.exists() and PT_FILES_DIR.exists():
@@ -188,9 +200,18 @@ def run_local(config: dict[str, str], image: Image.Image) -> dict[str, Any]:
             path = fallback_pt
 
     if not path.exists():
-        return {"provider": "local", "model": config.get("name", ""), "status": "skipped",
-                "error": f"Model file not found: {Path(config['path']).name}",
-                "detections": [], "top_confidence": 0.0}
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "local",
+            "model": config.get("name", ""),
+            "status": "skipped",
+            "http_status": None,
+            "failure_class": "invalid_model_id",
+            "error": f"Model file not found: {Path(config['path']).name}",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
 
     if str(path) not in _model_cache:
         _model_cache[str(path)] = YOLO(str(path))
@@ -208,64 +229,275 @@ def run_local(config: dict[str, str], image: Image.Image) -> dict[str, Any]:
                 "source": "local",
             })
     detections.sort(key=lambda x: x["confidence"], reverse=True)
-    return {"provider": "local", "model": config["name"], "detections": detections, "status": "ok"}
+    dt = round((time.time() - t0) * 1000, 2)
+    return {
+        "provider": "local",
+        "model": config["name"],
+        "status": "ok",
+        "http_status": None,
+        "failure_class": None,
+        "latency_ms": dt,
+        "detections": detections,
+        "top_confidence": detections[0]["confidence"] if detections else 0.0,
+    }
 
 
 def run_roboflow(config: dict[str, str], raw: bytes, content_type: str) -> dict[str, Any]:
+    t0 = time.time()
+    model_id = config.get("model_id", config.get("name", ""))
     if not ROBOFLOW_API_KEY:
-        return {"provider": "roboflow", "model": config.get("model_id", ""), "status": "skipped",
-                "error": "ROBOFLOW_API_KEY is not configured.", "detections": [], "top_confidence": 0.0}
-    url = f"https://serverless.roboflow.com/{config['model_id']}"
-    response = httpx.post(
-        url,
-        headers={"Authorization": f"Bearer {ROBOFLOW_API_KEY}"},
-        params={"confidence": CONFIDENCE, "overlap": IOU},
-        files={"file": ("image", raw, content_type)},
-        timeout=3.0,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    detections = normalize_detections(payload.get("predictions", []), "roboflow")
-    return {"provider": "roboflow", "model": config["model_id"], "detections": detections, "status": "ok"}
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "roboflow",
+            "model": model_id,
+            "status": "skipped",
+            "http_status": None,
+            "failure_class": "missing_or_invalid_credential",
+            "error": "ROBOFLOW_API_KEY is not configured.",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+    url = f"https://serverless.roboflow.com/{model_id}"
+    params = {"confidence": CONFIDENCE, "overlap": IOU, "api_key": ROBOFLOW_API_KEY}
+    headers = {"Authorization": f"Bearer {ROBOFLOW_API_KEY}"}
+
+    try:
+        response = httpx.post(
+            url,
+            headers=headers,
+            params=params,
+            files={"file": ("image", raw, content_type)},
+            timeout=3.0,
+        )
+        dt = round((time.time() - t0) * 1000, 2)
+        http_status = response.status_code
+
+        if http_status != 200:
+            failure_class = "http_error"
+            if http_status in (401, 403):
+                failure_class = "missing_or_invalid_credential"
+            elif http_status == 404:
+                failure_class = "invalid_model_id"
+            elif http_status in (502, 503, 504):
+                failure_class = "provider_unavailable"
+
+            return {
+                "provider": "roboflow",
+                "model": model_id,
+                "status": "error",
+                "http_status": http_status,
+                "failure_class": failure_class,
+                "error": f"Roboflow HTTP {http_status}",
+                "latency_ms": dt,
+                "detections": [],
+                "top_confidence": 0.0,
+            }
+
+        payload = response.json()
+        detections = normalize_detections(payload.get("predictions", []), "roboflow")
+        return {
+            "provider": "roboflow",
+            "model": model_id,
+            "status": "ok",
+            "http_status": 200,
+            "failure_class": None,
+            "latency_ms": dt,
+            "detections": detections,
+            "top_confidence": detections[0]["confidence"] if detections else 0.0,
+        }
+    except httpx.TimeoutException:
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "roboflow",
+            "model": model_id,
+            "status": "timeout",
+            "http_status": None,
+            "failure_class": "timeout",
+            "error": "Roboflow request timed out",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+    except json.JSONDecodeError:
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "roboflow",
+            "model": model_id,
+            "status": "error",
+            "http_status": 200,
+            "failure_class": "response_parsing_error",
+            "error": "Failed to parse Roboflow JSON response",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+    except Exception as exc:
+        dt = round((time.time() - t0) * 1000, 2)
+        err_msg = str(exc)
+        failure_class = "provider_unavailable" if ("getaddrinfo" in err_msg or "Connect" in err_msg or "Connection" in err_msg) else "http_error"
+        return {
+            "provider": "roboflow",
+            "model": model_id,
+            "status": "error",
+            "http_status": None,
+            "failure_class": failure_class,
+            "error": f"Roboflow error: {failure_class}",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
 
 
 def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "image/jpeg") -> dict[str, Any]:
+    t0 = time.time()
+    model_id = config.get("model_id", config.get("name", ""))
     if not HF_TOKEN:
-        return {"provider": "huggingface", "model": config.get("model_id", ""), "status": "skipped",
-                "error": "HF_TOKEN is not configured.", "detections": [], "top_confidence": 0.0}
-    model_id = config["model_id"]
-    url = f"https://api-inference.huggingface.co/models/{model_id}"
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "huggingface",
+            "model": model_id,
+            "status": "skipped",
+            "http_status": None,
+            "failure_class": "missing_or_invalid_credential",
+            "error": "HF_TOKEN is not configured.",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    url = f"https://router.huggingface.co/hf-inference/v1/models/{model_id}"
     headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": content_type}
-    response = httpx.post(url, headers=headers, content=raw, timeout=3.0)
-    response.raise_for_status()
-    payload = response.json()
-    items = []
-    if isinstance(payload, list):
-        for prediction in payload:
-            if isinstance(prediction, dict):
-                items.append({
-                    "label": prediction.get("label", "unknown"),
-                    "score": prediction.get("score", 0.0),
-                    "box": prediction.get("box", {}),
-                })
-    detections = normalize_detections(items, "huggingface")
-    return {"provider": "huggingface", "model": model_id, "detections": detections, "status": "ok"}
+
+    try:
+        response = httpx.post(url, headers=headers, content=raw, timeout=3.0)
+        dt = round((time.time() - t0) * 1000, 2)
+        http_status = response.status_code
+
+        if http_status != 200:
+            failure_class = "http_error"
+            if http_status in (401, 403):
+                failure_class = "missing_or_invalid_credential"
+            elif http_status == 404:
+                failure_class = "invalid_model_id"
+            elif http_status in (502, 503, 504, 507):
+                failure_class = "provider_unavailable"
+
+            return {
+                "provider": "huggingface",
+                "model": model_id,
+                "status": "error",
+                "http_status": http_status,
+                "failure_class": failure_class,
+                "error": f"Hugging Face HTTP {http_status}",
+                "latency_ms": dt,
+                "detections": [],
+                "top_confidence": 0.0,
+            }
+
+        payload = response.json()
+        items = []
+        if isinstance(payload, list):
+            for prediction in payload:
+                if isinstance(prediction, dict):
+                    items.append({
+                        "label": prediction.get("label", "unknown"),
+                        "score": prediction.get("score", 0.0),
+                        "box": prediction.get("box", {}),
+                    })
+        detections = normalize_detections(items, "huggingface")
+        return {
+            "provider": "huggingface",
+            "model": model_id,
+            "status": "ok",
+            "http_status": 200,
+            "failure_class": None,
+            "latency_ms": dt,
+            "detections": detections,
+            "top_confidence": detections[0]["confidence"] if detections else 0.0,
+        }
+    except httpx.TimeoutException:
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "huggingface",
+            "model": model_id,
+            "status": "timeout",
+            "http_status": None,
+            "failure_class": "timeout",
+            "error": "Hugging Face request timed out",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+    except json.JSONDecodeError:
+        dt = round((time.time() - t0) * 1000, 2)
+        return {
+            "provider": "huggingface",
+            "model": model_id,
+            "status": "error",
+            "http_status": 200,
+            "failure_class": "response_parsing_error",
+            "error": "Failed to parse Hugging Face JSON response",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+    except Exception as exc:
+        dt = round((time.time() - t0) * 1000, 2)
+        err_msg = str(exc)
+        failure_class = "provider_unavailable" if ("getaddrinfo" in err_msg or "Connect" in err_msg or "Connection" in err_msg) else "http_error"
+        return {
+            "provider": "huggingface",
+            "model": model_id,
+            "status": "error",
+            "http_status": None,
+            "failure_class": failure_class,
+            "error": f"Hugging Face error: {failure_class}",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
 
 
 def run_provider(config: dict[str, str], image: Image.Image, raw: bytes, content_type: str) -> dict[str, Any]:
+    t0 = time.time()
     try:
-        if config["provider"] == "local":
+        prov = config.get("provider", "unknown")
+        if prov == "local":
             result = run_local(config, image)
-        elif config["provider"] == "roboflow":
+        elif prov == "roboflow":
             result = run_roboflow(config, raw, content_type)
-        elif config["provider"] == "huggingface":
+        elif prov == "huggingface":
             result = run_huggingface(config, raw, content_type)
         else:
-            raise ValueError(f"Unknown provider: {config['provider']}")
-        result["top_confidence"] = result["detections"][0]["confidence"] if result["detections"] else 0.0
+            raise ValueError(f"Unknown provider: {prov}")
+        if "latency_ms" not in result:
+            result["latency_ms"] = round((time.time() - t0) * 1000, 2)
+        result["top_confidence"] = result["detections"][0]["confidence"] if result.get("detections") else 0.0
         return result
     except Exception as exc:
-        return {"provider": config["provider"], "model": config.get("model_id", config.get("name")), "status": "error", "error": str(exc), "detections": [], "top_confidence": 0.0}
+        dt = round((time.time() - t0) * 1000, 2)
+        err_str = str(exc)
+        failure_class = "http_error"
+        if "401" in err_str or "unauthorized" in err_str.lower():
+            failure_class = "missing_or_invalid_credential"
+        elif "404" in err_str or "not found" in err_str.lower():
+            failure_class = "invalid_model_id"
+        elif "timeout" in err_str.lower() or "timed out" in err_str.lower():
+            failure_class = "timeout"
+        elif "getaddrinfo" in err_str or "connection" in err_str.lower() or "connecterror" in err_str.lower():
+            failure_class = "provider_unavailable"
+        return {
+            "provider": config.get("provider", "unknown"),
+            "model": config.get("model_id", config.get("name", "unknown")),
+            "status": "error",
+            "http_status": None,
+            "failure_class": failure_class,
+            "error": f"Provider error: {failure_class}",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
 
 
 def best_result(runs: list[dict[str, Any]], min_conf: float = 0.0) -> dict[str, Any] | None:
@@ -339,7 +571,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     all_configs = crop_configs + SHARED_MODELS["pest"] + SHARED_MODELS["nutrient"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(all_configs) or 1) as executor:
         future_map = {executor.submit(run_provider, cfg, pil_image, raw, content_type): cfg for cfg in all_configs}
-        done, _ = concurrent.futures.wait(future_map.keys(), timeout=4.0)
+        done, _ = concurrent.futures.wait(future_map.keys(), timeout=10.0)
         results_by_config = {}
         for future in future_map.keys():
             cfg = future_map[future]
@@ -347,9 +579,39 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
                 try:
                     results_by_config[id(cfg)] = future.result()
                 except Exception as p_err:
-                    results_by_config[id(cfg)] = {"provider": cfg.get("provider", "unknown"), "status": "failed", "error": str(p_err), "detections": []}
+                    err_str = str(p_err)
+                    f_cls = "http_error"
+                    if "401" in err_str or "unauthorized" in err_str.lower():
+                        f_cls = "missing_or_invalid_credential"
+                    elif "404" in err_str or "not found" in err_str.lower():
+                        f_cls = "invalid_model_id"
+                    elif "timeout" in err_str.lower():
+                        f_cls = "timeout"
+                    elif "getaddrinfo" in err_str or "connection" in err_str.lower():
+                        f_cls = "provider_unavailable"
+                    results_by_config[id(cfg)] = {
+                        "provider": cfg.get("provider", "unknown"),
+                        "model": cfg.get("model_id", cfg.get("name", "unknown")),
+                        "status": "error",
+                        "http_status": None,
+                        "failure_class": f_cls,
+                        "error": f"Provider error: {f_cls}",
+                        "latency_ms": 0.0,
+                        "detections": [],
+                        "top_confidence": 0.0,
+                    }
             else:
-                results_by_config[id(cfg)] = {"provider": cfg.get("provider", "unknown"), "status": "timeout", "error": "Provider timed out", "detections": []}
+                results_by_config[id(cfg)] = {
+                    "provider": cfg.get("provider", "unknown"),
+                    "model": cfg.get("model_id", cfg.get("name", "unknown")),
+                    "status": "timeout",
+                    "http_status": None,
+                    "failure_class": "timeout",
+                    "error": "Provider timed out",
+                    "latency_ms": 4000.0,
+                    "detections": [],
+                    "top_confidence": 0.0,
+                }
 
     crop_runs = [results_by_config.get(id(cfg), {}) for cfg in crop_configs]
     pest_runs = [results_by_config.get(id(cfg), {}) for cfg in SHARED_MODELS["pest"]]
@@ -364,6 +626,20 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
 
     min_conf = CUSTOM_CROP_CONF_THRESHOLD if is_custom_crop else CONFIDENCE
 
+    per_provider_summary = []
+    for r in all_runs:
+        per_provider_summary.append({
+            "provider": str(r.get("provider", "unknown")),
+            "model": str(r.get("model", "unknown")),
+            "status": str(r.get("status", "unknown")),
+            "http_status": r.get("http_status"),
+            "failure_class": r.get("failure_class"),
+            "error": r.get("error"),
+            "latency_ms": round(float(r.get("latency_ms", 0.0)), 2),
+            "detections_count": len(r.get("detections", [])),
+            "top_confidence": round(float(r.get("top_confidence", 0.0)), 4),
+        })
+
     providers_summary = {
         "total_configured": total_configured,
         "succeeded": providers_succeeded,
@@ -371,6 +647,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         "timed_out": providers_timed_out,
         "skipped": providers_skipped,
         "applied_threshold": min_conf,
+        "details": per_provider_summary,
     }
 
     # Collect all raw candidate detections across all provider runs
