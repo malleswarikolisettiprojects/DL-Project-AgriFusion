@@ -12,6 +12,7 @@ Exposes REST endpoints for all 8 AI models and data services:
 9. Farm Records & History (/api/v1/farm/records, /api/v1/farm/save-record)
 """
 
+import json
 import logging
 import os
 import sys
@@ -34,7 +35,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 import uvicorn
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field

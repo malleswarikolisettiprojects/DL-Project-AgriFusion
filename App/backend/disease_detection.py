@@ -804,6 +804,7 @@ def predict_disease_and_pests(
             rag_remedies = None
             healthy_msg = "Crop appears healthy based on visual AI analysis."
             notice_text = f"{custom_crop_notice} {healthy_msg}" if custom_crop_notice else healthy_msg
+        else:
             rag_exec = concurrent.futures.ThreadPoolExecutor(max_workers=1)
             try:
                 rag_fut = rag_exec.submit(generate_rag_remedies, primary_label, crop=crop)

@@ -744,5 +744,37 @@ def test_advisory_engines_all_ml_modules():
     assert "e-NAM" in mkt_adv["official_portal"]
 
 
+def test_secure_disease_job_endpoint():
+    """Test job security: unauthenticated access without token is forbidden (403), token grant succeeds (200)."""
+    from fastapi.testclient import TestClient
+    from App.backend.server import app
+
+    client = TestClient(app)
+    raw = create_test_image_bytes()
+
+    res = client.post(
+        "/api/v1/predict/disease/async",
+        data={"crop": "Rice"},
+        files={"image": ("test_leaf.jpg", raw, "image/jpeg")},
+    )
+    assert res.status_code == 202
+    body = res.json()
+    assert body["queue_type"] == "best_effort_in_process"
+    assert "best-effort" in body["durability_notice"]
+
+    job_id = body["job_id"]
+    token = body["secret_token"]
+
+    # Unauthorized access
+    res_unauth = client.get(f"/api/v1/predict/disease/job/{job_id}")
+    assert res_unauth.status_code == 403
+
+    # Authorized access with token
+    res_auth = client.get(f"/api/v1/predict/disease/job/{job_id}?token={token}")
+    assert res_auth.status_code == 200
+    assert res_auth.json()["job_id"] == job_id
+
+
+
 
 
