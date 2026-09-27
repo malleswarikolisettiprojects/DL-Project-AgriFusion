@@ -555,22 +555,29 @@ def json_safe(value: Any) -> Any:
     return json.loads(json.dumps(value, default=str))
 
 
-def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg", content_type: str = "image/jpeg") -> dict[str, Any]:
+def predict_disease_and_pests(
+    crop: str,
+    raw: bytes,
+    filename: str = "image.jpg",
+    content_type: str = "image/jpeg",
+    request_id: Optional[str] = None,
+) -> dict[str, Any]:
     """
-    Core backend inference workflow:
-    1. Runs Crop-Specific Models (if listed)
-    2. Runs Shared Pest Models
-    3. Runs Shared Nutrient Deficiency Models
-    4. Evaluates highest confidence detections for visual bounding boxes
-    5. Collects secondary/alternate potential detections
-    6. Generates RAG Remedies (Chemical & Organic)
-    7. Supports unlisted/custom crops with 75% confidence thresholding & warning notices.
+    Core backend inference workflow with bounded stage timings:
+    1. Upload validation
+    2. Multi-provider Vision Inference (ThreadPool with non-blocking cleanup)
+    3. Bounded RAG Remedies Generation (3.0s timeout)
+    4. Bounded Storage Upload (2.5s timeout)
+    5. Non-blocking Telemetry Persistence
     """
+    t_start = time.time()
+    req_id = request_id or str(uuid.uuid4())[:8]
     crop_clean = crop.strip().lower()
     is_custom_crop = crop_clean not in CROP_MODELS
     custom_crop_notice = None
 
-    # ── Upload validation ──────────────────────────────────────────────────
+    # Stage 1: Upload validation
+    t_val_start = time.time()
     _validate_upload(raw, content_type)
 
     if is_custom_crop:
@@ -589,15 +596,19 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         raise
     except Exception as exc:
         raise ValueError("The uploaded file is not a valid image.") from exc
+    upload_validation_ms = round((time.time() - t_val_start) * 1000, 2)
 
+    # Stage 2: Multi-provider Vision Inference (8.0s hard timeout)
+    t_inf_start = time.time()
     import concurrent.futures
     all_configs = crop_configs + SHARED_MODELS["pest"] + SHARED_MODELS["nutrient"]
-    with concurrent.futures.ThreadPoolExecutor(max_workers=len(all_configs) or 1) as executor:
+    results_by_config = {}
+
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=len(all_configs) or 1)
+    try:
         future_map = {executor.submit(run_provider, cfg, pil_image, raw, content_type): cfg for cfg in all_configs}
-        done, _ = concurrent.futures.wait(future_map.keys(), timeout=12.0)
-        results_by_config = {}
-        for future in future_map.keys():
-            cfg = future_map[future]
+        done, pending = concurrent.futures.wait(future_map.keys(), timeout=8.0)
+        for future, cfg in future_map.items():
             if future in done:
                 try:
                     results_by_config[id(cfg)] = future.result()
@@ -631,10 +642,14 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
                     "http_status": None,
                     "failure_class": "timeout",
                     "error": "Provider timed out",
-                    "latency_ms": 5000.0,
+                    "latency_ms": 8000.0,
                     "detections": [],
                     "top_confidence": 0.0,
                 }
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+    vision_inference_ms = round((time.time() - t_inf_start) * 1000, 2)
 
     crop_runs = [results_by_config.get(id(cfg), {}) for cfg in crop_configs]
     pest_runs = [results_by_config.get(id(cfg), {}) for cfg in SHARED_MODELS["pest"]]
@@ -751,13 +766,10 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         inference_outcome = "provider_error"
         execution_status = "error"
     elif has_crop_disease_models and crop_disease_succeeded == 0:
-        # Crop has configured disease models, but ALL crop-specific disease models failed/timed out
         if all_winners:
-            # Pest or nutrient model succeeded and detected a candidate above min_conf
             inference_outcome = "detected"
             execution_status = "partial"
         else:
-            # Crop disease models failed and zero candidate detections were returned
             inference_outcome = "provider_error"
             execution_status = "partial" if providers_succeeded > 0 else "error"
     elif not all_raw_detections:
@@ -782,6 +794,8 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         lbl = label_str.lower().strip()
         return "healthy" in lbl or lbl == "healthy crop leaf"
 
+    # Stage 3: Bounded & Non-blocking RAG Remedies Generation (3.0s limit)
+    t_rag_start = time.time()
     if inference_outcome == "detected":
         primary_label = all_winners[0]["detection"]["label"]
         top_confidence_val = round(float(all_winners[0]["detection"].get("confidence", 0.0)), 4)
@@ -791,7 +805,17 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
             healthy_msg = "Crop appears healthy based on visual AI analysis."
             notice_text = f"{custom_crop_notice} {healthy_msg}" if custom_crop_notice else healthy_msg
         else:
-            rag_remedies = generate_rag_remedies(primary_label, crop=crop)
+            try:
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as rag_exec:
+                    rag_fut = rag_exec.submit(generate_rag_remedies, primary_label, crop=crop)
+                    rag_remedies = rag_fut.result(timeout=3.0)
+            except concurrent.futures.TimeoutError:
+                print(f"[{req_id}] RAG remedies generation timed out (>3.0s) - proceeding without remedies")
+                rag_remedies = None
+            except Exception as rag_err:
+                print(f"[{req_id}] RAG remedies generation warning: {rag_err}")
+                rag_remedies = None
+
             if has_crop_disease_models and crop_disease_succeeded == 0:
                 disease_warn = "Pest or nutrient candidate detected, but crop-specific disease assessment could not be completed because disease vision models timed out or were unavailable."
                 notice_text = f"{custom_crop_notice} {disease_warn}" if custom_crop_notice else disease_warn
@@ -800,7 +824,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         is_low_confidence = True
         top_confidence_val = round(float(all_raw_detections[0]["confidence"]), 4) if all_raw_detections else None
         top_conf_pct = f"{top_confidence_val * 100:.1f}%" if top_confidence_val is not None else "low"
-        primary_label = None  # Do NOT fabricate healthy diagnosis
+        primary_label = None
         low_conf_msg = (
             f"Candidate pattern detected but confidence ({top_conf_pct}) is below the required threshold ({min_conf * 100:.0f}%). "
             "Results may not be reliable. Please consult an agriculture professional."
@@ -809,7 +833,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
 
     elif inference_outcome == "no_detection":
         is_low_confidence = False
-        primary_label = None  # Do NOT fabricate healthy diagnosis
+        primary_label = None
         top_confidence_val = None
         no_det_msg = (
             "No disease or pest symptoms were detected by visual analysis. "
@@ -819,7 +843,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
 
     elif inference_outcome == "provider_error":
         is_low_confidence = False
-        primary_label = None  # Do NOT fabricate healthy diagnosis
+        primary_label = None
         top_confidence_val = None
         if total_configured == 0:
             err_msg = (
@@ -843,7 +867,10 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
             notice_text = f"{custom_crop_notice} {notice_text}"
         else:
             notice_text = custom_crop_notice
+    rag_remedies_ms = round((time.time() - t_rag_start) * 1000, 2)
 
+    # Stage 4: Bounded Storage Upload (2.5s limit)
+    t_st_start = time.time()
     prediction_id = str(uuid.uuid4())
     extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else "jpg"
     extension = extension if extension in {"jpg", "jpeg", "png", "webp"} else "jpg"
@@ -852,11 +879,29 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
 
     admin_client = _get_admin_client()
     if admin_client:
-        try:
+        def _do_upload():
             admin_client.storage.from_(SUPABASE_BUCKET).upload(storage_path, raw, {"content-type": content_type, "upsert": "false"})
-            image_url = admin_client.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
+            return admin_client.storage.from_(SUPABASE_BUCKET).get_public_url(storage_path)
+
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as st_exec:
+                st_fut = st_exec.submit(_do_upload)
+                image_url = st_fut.result(timeout=2.5)
         except Exception as exc:
-            print(f"Warning: Supabase Storage upload skipped/failed: {exc}")
+            print(f"[{req_id}] Warning: Supabase Storage upload skipped/failed: {exc}")
+    storage_upload_ms = round((time.time() - t_st_start) * 1000, 2)
+
+    # Stage 5: Non-blocking Telemetry DB Insert
+    t_db_start = time.time()
+    total_latency_ms = round((time.time() - t_start) * 1000, 2)
+    stage_timings_ms = {
+        "upload_validation_ms": upload_validation_ms,
+        "vision_inference_ms": vision_inference_ms,
+        "rag_remedies_ms": rag_remedies_ms,
+        "storage_upload_ms": storage_upload_ms,
+        "telemetry_persist_ms": 0.0,
+        "total_latency_ms": total_latency_ms,
+    }
 
     candidate_summary = {
         "crop_models_evaluated": len(crop_runs),
@@ -871,10 +916,12 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         },
         "is_low_confidence": is_low_confidence,
         "inference_outcome": inference_outcome,
+        "stage_timings_ms": stage_timings_ms,
     }
 
     output = {
         "id": prediction_id,
+        "request_id": req_id,
         "disclaimer": AI_DISCLAIMER_TEXT,
         "crop": crop,
         "is_custom_crop": is_custom_crop,
@@ -891,6 +938,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         "low_confidence_notice": notice_text if is_low_confidence else None,
         "providers_summary": providers_summary,
         "candidate_summary": candidate_summary,
+        "stage_timings_ms": stage_timings_ms,
         "selected_crop_result": top_crop,
         "selected_pest_result": top_pest,
         "selected_nutrient_result": top_nutrient,
@@ -907,6 +955,9 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
                 supabase.table("crop_prediction").insert(json_safe(output)).execute()
             except Exception:
                 pass
+    telemetry_persist_ms = round((time.time() - t_db_start) * 1000, 2)
+    stage_timings_ms["telemetry_persist_ms"] = telemetry_persist_ms
+    stage_timings_ms["total_latency_ms"] = round((time.time() - t_start) * 1000, 2)
 
     return output
 

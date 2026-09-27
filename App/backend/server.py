@@ -948,9 +948,9 @@ async def api_predict_disease(
         result = await asyncio.wait_for(
             run_in_threadpool(
                 predict_disease_and_pests,
-                crop=crop, raw=raw, filename=image.filename or "image.jpg", content_type=content_type
+                crop=crop, raw=raw, filename=image.filename or "image.jpg", content_type=content_type, request_id=req_id
             ),
-            timeout=60.0,
+            timeout=20.0,
         )
         duration_ms = round((time.time() - t0) * 1000, 2)
 
@@ -1008,7 +1008,7 @@ async def api_predict_disease(
                     })
 
         try:
-            save_res = save_disease_prediction({
+            save_payload = {
                 "user_id":                 user_id,
                 "user_email":              user_email,
                 "crop":                    crop,
@@ -1039,11 +1039,18 @@ async def api_predict_disease(
                 "status":                 "pending_review",
                 "execution_status":       result.get("execution_status", "success"),
                 "latency_ms":              duration_ms,
-            })
+            }
+            save_res = await asyncio.wait_for(
+                run_in_threadpool(save_disease_prediction, save_payload),
+                timeout=3.0
+            )
             if isinstance(save_res, dict) and not save_res.get("telemetry_saved"):
                 logger.warning("[%s] Supabase disease telemetry save failed: %s", req_id, save_res.get("error") or "telemetry_saved is False")
+        except asyncio.TimeoutError:
+            logger.warning("[%s] Supabase telemetry insert timed out (>3.0s) - returning response without blocking user", req_id)
         except Exception as db_err:
             logger.warning("[%s] Supabase disease log non-blocking warning: %s", req_id, db_err)
+
         logger.info("[%s] Disease inference success in %sms", req_id, duration_ms)
         resp_obj = {"success": True, "stage": "disease", "result": result}
         _cache_duplicate_disease_response(user_id, crop, raw, resp_obj)
@@ -1063,7 +1070,7 @@ async def api_predict_disease(
         return make_error_response(400, "disease", "INVALID_FILE_UPLOAD", str(val_err), retryable=False)
     except asyncio.TimeoutError:
         duration_ms = round((time.time() - t0) * 1000, 2)
-        logger.error("[%s] Disease inference TIMEOUT (>30s)", req_id)
+        logger.error("[%s] Disease inference TIMEOUT (>20s)", req_id)
         log_ml_prediction_event({
             "model_type": "disease_detection",
             "crop": crop,
@@ -1073,7 +1080,14 @@ async def api_predict_disease(
             "latency_ms": duration_ms,
             "user_id": user_id,
         })
-        return make_error_response(504, "disease", "DISEASE_SERVICE_TIMEOUT", "Disease diagnosis request timed out.", retryable=True)
+        return make_error_response(
+            504,
+            "disease",
+            "DISEASE_SERVICE_TIMEOUT",
+            f"Disease diagnosis request timed out after {duration_ms}ms.",
+            retryable=True,
+            details={"request_id": req_id, "stage_timings_ms": {"total_latency_ms": duration_ms}},
+        )
     except Exception as err:
         duration_ms = round((time.time() - t0) * 1000, 2)
         logger.exception("[%s] Disease inference failed: %s", req_id, err)
