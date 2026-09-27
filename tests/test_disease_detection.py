@@ -127,7 +127,7 @@ def test_all_providers_failing():
         assert res["is_low_confidence"] is False
         assert res["low_confidence_notice"] is None
         assert res["rag_remedies"] is None
-        assert "currently unavailable" in res["notice"]
+        assert "unavailable" in res["notice"]
 
 def test_provider_timeout():
     """6. Test model providers timing out."""
@@ -494,5 +494,148 @@ def test_sanitized_per_provider_details_structure():
         assert "ROBOFLOW_API_KEY" not in dump_str
         assert "HF_TOKEN" not in dump_str
         assert "Authorization" not in dump_str
+
+
+def test_crop_specific_timeouts_with_shared_provider_success():
+    """17. Test crop disease model timeouts when shared pest provider succeeds with zero detections. Must NOT return no_detection."""
+    raw = create_test_image_bytes()
+
+    def mock_run_prov(cfg, img, raw_b, ct):
+        name = cfg.get("name", "")
+        if name == "pests-rt37d":  # Shared pest model
+            return {
+                "provider": "roboflow",
+                "model": "pests-rt37d/1",
+                "status": "ok",
+                "http_status": 200,
+                "failure_class": None,
+                "latency_ms": 150.0,
+                "detections": [],
+                "top_confidence": 0.0,
+            }
+        # Crop-specific disease models time out
+        return {
+            "provider": cfg.get("provider", "roboflow"),
+            "model": cfg.get("model_id", cfg.get("name", "")),
+            "status": "timeout",
+            "http_status": None,
+            "failure_class": "timeout",
+            "latency_ms": 5000.0,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    with patch("App.backend.disease_detection.run_provider", side_effect=mock_run_prov):
+        res = predict_disease_and_pests(crop="rice", raw=raw)
+
+        # MUST NOT return no_detection when crop disease models timed out!
+        assert res["inference_outcome"] == "provider_error"
+        assert res["execution_status"] == "partial"
+        assert "could not be completed" in res["notice"]
+        cats = res["providers_summary"]["categories"]
+        assert cats["disease"]["succeeded"] == 0
+        assert cats["disease"]["timed_out"] > 0
+        assert cats["pest"]["succeeded"] > 0
+
+
+def test_crop_specific_success_with_zero_detections():
+    """18. Test crop disease model succeeding with zero detections yields no_detection."""
+    raw = create_test_image_bytes()
+
+    def mock_run_prov(cfg, img, raw_b, ct):
+        name = cfg.get("name", "")
+        if name == "rice-leaf-disease-s1asn":
+            return {
+                "provider": "roboflow",
+                "model": "rice-leaf-disease-s1asn/2",
+                "status": "ok",
+                "http_status": 200,
+                "failure_class": None,
+                "latency_ms": 200.0,
+                "detections": [],
+                "top_confidence": 0.0,
+            }
+        return {
+            "provider": cfg.get("provider", "roboflow"),
+            "model": cfg.get("model_id", cfg.get("name", "")),
+            "status": "error",
+            "http_status": 503,
+            "failure_class": "provider_unavailable",
+            "latency_ms": 100.0,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    with patch("App.backend.disease_detection.run_provider", side_effect=mock_run_prov):
+        res = predict_disease_and_pests(crop="rice", raw=raw)
+
+        assert res["inference_outcome"] == "no_detection"
+        assert res["execution_status"] == "success"
+        cats = res["providers_summary"]["categories"]
+        assert cats["disease"]["succeeded"] == 1
+
+
+def test_disease_success_plus_shared_provider_failure():
+    """19. Test crop disease model succeeding with a candidate detection while shared provider fails."""
+    raw = create_test_image_bytes()
+
+    def mock_run_prov(cfg, img, raw_b, ct):
+        name = cfg.get("name", "")
+        if name == "rice-leaf-disease-s1asn":
+            return {
+                "provider": "roboflow",
+                "model": "rice-leaf-disease-s1asn/2",
+                "status": "ok",
+                "http_status": 200,
+                "failure_class": None,
+                "latency_ms": 180.0,
+                "detections": [{"label": "Rice_Bacterial_blight", "confidence": 0.88, "box_xyxy": [0, 0, 10, 10]}],
+                "top_confidence": 0.88,
+            }
+        return {
+            "provider": cfg.get("provider", "huggingface"),
+            "model": cfg.get("model_id", cfg.get("name", "")),
+            "status": "error",
+            "http_status": 400,
+            "failure_class": "http_error",
+            "latency_ms": 120.0,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    with patch("App.backend.disease_detection.run_provider", side_effect=mock_run_prov):
+        with patch("App.backend.disease_detection.generate_rag_remedies", return_value=None):
+            res = predict_disease_and_pests(crop="rice", raw=raw)
+
+            assert res["inference_outcome"] == "detected"
+            assert res["primary_diagnosis"] == "Rice_Bacterial_blight"
+            assert res["execution_status"] == "success"
+            cats = res["providers_summary"]["categories"]
+            assert cats["disease"]["succeeded"] > 0
+            assert (cats["pest"]["failed"] > 0 or cats["pest"]["timed_out"] > 0 or cats["nutrient"]["failed"] > 0)
+
+
+def test_all_providers_failing_regression():
+    """20. Test all providers failing yields provider_error and execution_status='error'."""
+    raw = create_test_image_bytes()
+
+    def mock_run_prov(cfg, img, raw_b, ct):
+        return {
+            "provider": cfg.get("provider", "roboflow"),
+            "model": cfg.get("model_id", cfg.get("name", "")),
+            "status": "error",
+            "http_status": 500,
+            "failure_class": "http_error",
+            "latency_ms": 100.0,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    with patch("App.backend.disease_detection.run_provider", side_effect=mock_run_prov):
+        res = predict_disease_and_pests(crop="rice", raw=raw)
+
+        assert res["inference_outcome"] == "provider_error"
+        assert res["execution_status"] == "error"
+
 
 

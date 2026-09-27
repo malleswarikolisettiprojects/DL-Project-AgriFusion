@@ -268,7 +268,7 @@ def run_roboflow(config: dict[str, str], raw: bytes, content_type: str) -> dict[
             headers=headers,
             params=params,
             files={"file": ("image", raw, content_type)},
-            timeout=3.0,
+            timeout=5.0,
         )
         dt = round((time.time() - t0) * 1000, 2)
         http_status = response.status_code
@@ -366,35 +366,74 @@ def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "ima
             "top_confidence": 0.0,
         }
 
-    url = f"https://router.huggingface.co/hf-inference/v1/models/{model_id}"
-    headers = {"Authorization": f"Bearer {HF_TOKEN}", "Content-Type": content_type}
+    urls = [
+        f"https://router.huggingface.co/hf-inference/v1/models/{model_id}",
+        f"https://api-inference.huggingface.co/models/{model_id}",
+    ]
+    base_headers = {"Authorization": f"Bearer {HF_TOKEN}"}
 
-    try:
-        response = httpx.post(url, headers=headers, content=raw, timeout=3.0)
-        dt = round((time.time() - t0) * 1000, 2)
-        http_status = response.status_code
+    response = None
+    last_http_status = None
 
-        if http_status != 200:
-            failure_class = "http_error"
-            if http_status in (401, 403):
-                failure_class = "missing_or_invalid_credential"
-            elif http_status == 404:
-                failure_class = "invalid_model_id"
-            elif http_status in (502, 503, 504, 507):
-                failure_class = "provider_unavailable"
-
+    for url in urls:
+        try:
+            headers = {**base_headers, "Content-Type": content_type}
+            res = httpx.post(url, headers=headers, content=raw, timeout=5.0)
+            last_http_status = res.status_code
+            if res.status_code == 200:
+                response = res
+                break
+            elif res.status_code == 400:
+                # Try base64 JSON payload
+                b64_data = base64.b64encode(raw).decode("utf-8")
+                json_headers = {**base_headers, "Content-Type": "application/json"}
+                json_body = {"inputs": f"data:{content_type};base64,{b64_data}"}
+                res_j = httpx.post(url, headers=json_headers, json=json_body, timeout=5.0)
+                last_http_status = res_j.status_code
+                if res_j.status_code == 200:
+                    response = res_j
+                    break
+        except httpx.TimeoutException:
+            dt = round((time.time() - t0) * 1000, 2)
             return {
                 "provider": "huggingface",
                 "model": model_id,
-                "status": "error",
-                "http_status": http_status,
-                "failure_class": failure_class,
-                "error": f"Hugging Face HTTP {http_status}",
+                "status": "timeout",
+                "http_status": None,
+                "failure_class": "timeout",
+                "error": "Hugging Face request timed out",
                 "latency_ms": dt,
                 "detections": [],
                 "top_confidence": 0.0,
             }
+        except Exception:
+            pass
 
+    dt = round((time.time() - t0) * 1000, 2)
+
+    if response is None:
+        http_status = last_http_status or 400
+        failure_class = "http_error"
+        if http_status in (401, 403):
+            failure_class = "missing_or_invalid_credential"
+        elif http_status == 404:
+            failure_class = "invalid_model_id"
+        elif http_status in (502, 503, 504, 507):
+            failure_class = "provider_unavailable"
+
+        return {
+            "provider": "huggingface",
+            "model": model_id,
+            "status": "error",
+            "http_status": http_status,
+            "failure_class": failure_class,
+            "error": f"Hugging Face HTTP {http_status}",
+            "latency_ms": dt,
+            "detections": [],
+            "top_confidence": 0.0,
+        }
+
+    try:
         payload = response.json()
         items = []
         if isinstance(payload, list):
@@ -416,21 +455,7 @@ def run_huggingface(config: dict[str, str], raw: bytes, content_type: str = "ima
             "detections": detections,
             "top_confidence": detections[0]["confidence"] if detections else 0.0,
         }
-    except httpx.TimeoutException:
-        dt = round((time.time() - t0) * 1000, 2)
-        return {
-            "provider": "huggingface",
-            "model": model_id,
-            "status": "timeout",
-            "http_status": None,
-            "failure_class": "timeout",
-            "error": "Hugging Face request timed out",
-            "latency_ms": dt,
-            "detections": [],
-            "top_confidence": 0.0,
-        }
     except json.JSONDecodeError:
-        dt = round((time.time() - t0) * 1000, 2)
         return {
             "provider": "huggingface",
             "model": model_id,
@@ -571,7 +596,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     all_configs = crop_configs + SHARED_MODELS["pest"] + SHARED_MODELS["nutrient"]
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(all_configs) or 1) as executor:
         future_map = {executor.submit(run_provider, cfg, pil_image, raw, content_type): cfg for cfg in all_configs}
-        done, _ = concurrent.futures.wait(future_map.keys(), timeout=10.0)
+        done, _ = concurrent.futures.wait(future_map.keys(), timeout=12.0)
         results_by_config = {}
         for future in future_map.keys():
             cfg = future_map[future]
@@ -608,7 +633,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
                     "http_status": None,
                     "failure_class": "timeout",
                     "error": "Provider timed out",
-                    "latency_ms": 4000.0,
+                    "latency_ms": 5000.0,
                     "detections": [],
                     "top_confidence": 0.0,
                 }
@@ -625,6 +650,39 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
     providers_skipped = sum(1 for r in all_runs if r.get("status") == "skipped")
 
     min_conf = CUSTOM_CROP_CONF_THRESHOLD if is_custom_crop else CONFIDENCE
+
+    def _make_category_summary(runs: list[dict[str, Any]]) -> dict[str, Any]:
+        tot = len(runs)
+        succ = sum(1 for r in runs if r.get("status") == "ok")
+        fail = sum(1 for r in runs if r.get("status") in ("error", "failed"))
+        tout = sum(1 for r in runs if r.get("status") == "timeout")
+        skip = sum(1 for r in runs if r.get("status") == "skipped")
+        details = [
+            {
+                "provider": str(r.get("provider", "unknown")),
+                "model": str(r.get("model", "unknown")),
+                "status": str(r.get("status", "unknown")),
+                "http_status": r.get("http_status"),
+                "failure_class": r.get("failure_class"),
+                "error": r.get("error"),
+                "latency_ms": round(float(r.get("latency_ms", 0.0)), 2),
+                "detections_count": len(r.get("detections", [])),
+                "top_confidence": round(float(r.get("top_confidence", 0.0)), 4),
+            }
+            for r in runs
+        ]
+        return {
+            "total_configured": tot,
+            "succeeded": succ,
+            "failed": fail,
+            "timed_out": tout,
+            "skipped": skip,
+            "details": details,
+        }
+
+    disease_summary = _make_category_summary(crop_runs)
+    pest_summary = _make_category_summary(pest_runs)
+    nutrient_summary = _make_category_summary(nutrient_runs)
 
     per_provider_summary = []
     for r in all_runs:
@@ -647,6 +705,11 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         "timed_out": providers_timed_out,
         "skipped": providers_skipped,
         "applied_threshold": min_conf,
+        "categories": {
+            "disease": disease_summary,
+            "pest": pest_summary,
+            "nutrient": nutrient_summary,
+        },
         "details": per_provider_summary,
     }
 
@@ -682,19 +745,32 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         if not is_winner and det["confidence"] >= 0.15:
             other_possible_detections.append(det)
 
-    # Classify inference_outcome into one of 4 distinct categories:
-    # 1. provider_error: zero configured models OR all configured providers failed/timed out/skipped (succeeded == 0)
-    # 2. no_detection: providers responded successfully (succeeded > 0), but zero candidate detections were returned
-    # 3. low_confidence: candidate detections exist, but top candidate is below applied threshold (min_conf)
-    # 4. detected: top candidate meets or exceeds applied threshold (min_conf)
+    has_crop_disease_models = (not is_custom_crop) and (len(crop_configs) > 0)
+    crop_disease_succeeded = disease_summary["succeeded"]
+
+    # Classify inference_outcome & execution_status
     if total_configured == 0 or providers_succeeded == 0:
         inference_outcome = "provider_error"
+        execution_status = "error"
+    elif has_crop_disease_models and crop_disease_succeeded == 0:
+        # Crop has configured disease models, but ALL crop-specific disease models failed/timed out
+        if all_winners:
+            # Pest or nutrient model succeeded and detected a candidate above min_conf
+            inference_outcome = "detected"
+            execution_status = "partial"
+        else:
+            # Crop disease models failed and zero candidate detections were returned
+            inference_outcome = "provider_error"
+            execution_status = "partial" if providers_succeeded > 0 else "error"
     elif not all_raw_detections:
         inference_outcome = "no_detection"
+        execution_status = "success"
     elif not all_winners:
         inference_outcome = "low_confidence"
+        execution_status = "success"
     else:
         inference_outcome = "detected"
+        execution_status = "success"
 
     primary_label: Optional[str] = None
     top_confidence_val: Optional[float] = None
@@ -715,46 +791,54 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         if _is_healthy_label(primary_label):
             rag_remedies = None
             healthy_msg = "Crop appears healthy based on visual AI analysis."
-            if not notice_text:
-                notice_text = healthy_msg
-            else:
-                notice_text = f"{notice_text} {healthy_msg}"
+            notice_text = f"{custom_crop_notice} {healthy_msg}" if custom_crop_notice else healthy_msg
         else:
             rag_remedies = generate_rag_remedies(primary_label, crop=crop)
+            if has_crop_disease_models and crop_disease_succeeded == 0:
+                disease_warn = "Pest or nutrient candidate detected, but crop-specific disease assessment could not be completed because disease vision models timed out or were unavailable."
+                notice_text = f"{custom_crop_notice} {disease_warn}" if custom_crop_notice else disease_warn
 
     elif inference_outcome == "low_confidence":
         is_low_confidence = True
         top_confidence_val = round(float(all_raw_detections[0]["confidence"]), 4) if all_raw_detections else None
         top_conf_pct = f"{top_confidence_val * 100:.1f}%" if top_confidence_val is not None else "low"
         primary_label = None  # Do NOT fabricate healthy diagnosis
-        notice_text = (
+        low_conf_msg = (
             f"Candidate pattern detected but confidence ({top_conf_pct}) is below the required threshold ({min_conf * 100:.0f}%). "
             "Results may not be reliable. Please consult an agriculture professional."
         )
+        notice_text = f"{custom_crop_notice} {low_conf_msg}" if custom_crop_notice else low_conf_msg
 
     elif inference_outcome == "no_detection":
         is_low_confidence = False
         primary_label = None  # Do NOT fabricate healthy diagnosis
         top_confidence_val = None
-        notice_text = (
+        no_det_msg = (
             "No disease or pest symptoms were detected by visual analysis. "
             "If your crop displays unusual symptoms, please consult a local Agriculture Officer."
         )
+        notice_text = f"{custom_crop_notice} {no_det_msg}" if custom_crop_notice else no_det_msg
 
     elif inference_outcome == "provider_error":
         is_low_confidence = False
         primary_label = None  # Do NOT fabricate healthy diagnosis
         top_confidence_val = None
         if total_configured == 0:
-            notice_text = (
+            err_msg = (
                 "No visual inference models are configured for this selection. "
                 "Automated analysis is currently unavailable."
             )
+        elif has_crop_disease_models and crop_disease_succeeded == 0:
+            err_msg = (
+                f"Crop disease assessment for '{crop.capitalize()}' could not be completed because disease vision models timed out or were unavailable. "
+                "Please try again later or consult a local agronomy expert."
+            )
         else:
-            notice_text = (
+            err_msg = (
                 "Automated visual analysis is currently unavailable or timed out. "
                 "Please try again later or consult a local agronomy expert."
             )
+        notice_text = f"{custom_crop_notice} {err_msg}" if custom_crop_notice else err_msg
 
     if is_custom_crop and custom_crop_notice:
         if notice_text and notice_text != custom_crop_notice:
@@ -797,7 +881,7 @@ def predict_disease_and_pests(crop: str, raw: bytes, filename: str = "image.jpg"
         "crop": crop,
         "is_custom_crop": is_custom_crop,
         "inference_outcome": inference_outcome,
-        "execution_status": "success" if providers_succeeded > 0 else "error",
+        "execution_status": execution_status,
         "review_status": "pending_review",
         "notice": notice_text,
         "image_url": image_url,
