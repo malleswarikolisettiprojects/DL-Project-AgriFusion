@@ -504,3 +504,157 @@ def add_advisory_note(query_id: str, admin_user_id: str, note: str) -> bool:
     except Exception as exc:
         logger.error("Failed to add advisory note: %s", exc)
         return False
+
+
+MIN_REGIONAL_PRIVACY_THRESHOLD = 3
+
+def fetch_advisory_analytics(
+    crop: Optional[str] = None,
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = None,
+) -> dict:
+    """
+    Computes server-side aggregate analytics for advisory activity.
+    Enforces privacy policy by suppressing regional groups below threshold (3).
+    Returns only aggregated counts and citation metrics — no PII or raw query text.
+    Raises RuntimeError on database failure (fails closed with HTTP 500).
+    """
+    init_advisories_db()
+    rows_data = []
+
+    from App.backend.settings import SUPABASE_URL
+    supabase = _get_supabase()
+
+    if SUPABASE_URL:
+        if supabase is None:
+            logger.error("Supabase configured but admin client unavailable for advisory analytics.")
+            raise RuntimeError("Database query failed for advisory analytics")
+        try:
+            q = supabase.table("advisory_activity").select("*")
+            if crop:
+                q = q.eq("crop", crop)
+            if state:
+                q = q.eq("state", state)
+            if district:
+                q = q.eq("district", district)
+            res = q.execute()
+            if res.data is not None:
+                rows_data = res.data
+            else:
+                logger.error("Supabase advisory_activity query returned None response for analytics")
+                raise RuntimeError("Database query failed for advisory analytics")
+        except Exception as exc:
+            logger.error("Supabase advisory_activity analytics read failure: %s", exc)
+            raise RuntimeError("Database query failed for advisory analytics") from exc
+    else:
+        try:
+            conn = _get_db_connection()
+            cursor = conn.cursor()
+            query = "SELECT * FROM advisory_activity WHERE 1=1"
+            params = []
+            if crop:
+                query += " AND LOWER(crop) = LOWER(?)"
+                params.append(crop)
+            if state:
+                query += " AND LOWER(state) = LOWER(?)"
+                params.append(state)
+            if district:
+                query += " AND LOWER(district) = LOWER(?)"
+                params.append(district)
+
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            rows_data = [dict(r) for r in rows]
+            conn.close()
+        except Exception as exc:
+            logger.error("SQLite advisory_activity analytics read failure: %s", exc)
+            raise RuntimeError("Database query failed for advisory analytics") from exc
+
+    filtered = []
+    for r in rows_data:
+        if start_date and (r.get("created_at") or "") < start_date:
+            continue
+        if end_date and (r.get("created_at") or "") > end_date:
+            continue
+        if search:
+            s_term = search.strip().lower()
+            qs = (r.get("query_summary") or "").lower()
+            cr = (r.get("crop") or "").lower()
+            st_val = (r.get("state") or "").lower()
+            dt_val = (r.get("district") or "").lower()
+            qid = (r.get("query_id") or "").lower()
+            if not (s_term in qs or s_term in cr or s_term in st_val or s_term in dt_val or s_term in qid):
+                continue
+        filtered.append(r)
+
+    total_queries = len(filtered)
+    eligible_queries = 0
+    cited_queries = 0
+
+    crop_counts: Dict[str, int] = {}
+    region_counts: Dict[tuple, int] = {}
+
+    for r in filtered:
+        status = r.get("activity_status") or "success"
+        if status in ("success", "no_verified_source"):
+            eligible_queries += 1
+            is_no_source = bool(r.get("no_verified_source"))
+            citations_present = False
+            try:
+                comp = json.loads(r.get("compliance_json") or "{}")
+                citations_present = bool(comp.get("citations_present", not is_no_source))
+            except Exception:
+                citations_present = not is_no_source
+
+            if not is_no_source and citations_present:
+                cited_queries += 1
+
+        c_val = (r.get("crop") or "Unknown").strip().title()
+        crop_counts[c_val] = crop_counts.get(c_val, 0) + 1
+
+        s_val = (r.get("state") or "Unknown").strip().title()
+        d_val = (r.get("district") or "Unknown").strip().title()
+        region_counts[(s_val, d_val)] = region_counts.get((s_val, d_val), 0) + 1
+
+    citation_percent = round((cited_queries / eligible_queries * 100.0), 2) if eligible_queries > 0 else 0.0
+
+    top_crops = [
+        {"crop": c, "query_count": cnt}
+        for c, cnt in sorted(crop_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    ]
+
+    regional_queries = []
+    suppressed_count = 0
+    for (st, dt), cnt in sorted(region_counts.items(), key=lambda x: x[1], reverse=True):
+        if cnt >= MIN_REGIONAL_PRIVACY_THRESHOLD:
+            regional_queries.append({"state": st, "district": dt, "query_count": cnt})
+        else:
+            suppressed_count += cnt
+
+    if suppressed_count > 0:
+        regional_queries.append({
+            "state": "Other Regions",
+            "district": "Suppressed for privacy (<3 queries)",
+            "query_count": suppressed_count,
+        })
+
+    privacy_note = (
+        "Aggregated advisory analytics (anonymized). Regional groups with fewer than "
+        f"{MIN_REGIONAL_PRIVACY_THRESHOLD} queries are suppressed for farmer privacy."
+    )
+
+    return {
+        "total_queries": total_queries,
+        "citation_rate": {
+            "cited_queries": cited_queries,
+            "eligible_queries": eligible_queries,
+            "percent": citation_percent,
+        },
+        "top_crops": top_crops,
+        "regional_queries": regional_queries,
+        "privacy_note": privacy_note,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+    }

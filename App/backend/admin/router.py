@@ -22,6 +22,7 @@ from App.backend.auth.dependencies import (
 from App.backend.database.advisories_db import (
     add_advisory_note,
     fetch_advisory_activities,
+    fetch_advisory_analytics,
     update_advisory_review_status,
 )
 from App.backend.database.audit import fetch_audit_logs, record_audit_event
@@ -391,6 +392,32 @@ class AdvisoryActivityResponse(BaseModel):
     page_size: int
     total: int
     privacy_note: str
+
+
+class CitationRateMetrics(BaseModel):
+    cited_queries: int
+    eligible_queries: int
+    percent: float
+
+
+class TopCropMetric(BaseModel):
+    crop: str
+    query_count: int
+
+
+class RegionalQueryMetric(BaseModel):
+    state: str
+    district: str
+    query_count: int
+
+
+class AdvisoryAnalyticsResponse(BaseModel):
+    total_queries: int
+    citation_rate: CitationRateMetrics
+    top_crops: List[TopCropMetric]
+    regional_queries: List[RegionalQueryMetric]
+    privacy_note: str
+    generated_at: str
 
 
 class UpdateAdvisoryReviewRequest(BaseModel):
@@ -1129,6 +1156,58 @@ async def get_admin_advisories(
         raise
     except Exception as exc:
         logger.error("Failed to fetch admin advisory activity: %s", exc)
+        raise HTTPException(
+            status_code=500,
+            detail="The backend encountered an internal error.",
+        ) from exc
+
+
+@admin_router.get(
+    "/advisory-analytics",
+    response_model=AdvisoryAnalyticsResponse,
+)
+async def get_admin_advisory_analytics(
+    crop: Optional[str] = None,
+    state: Optional[str] = None,
+    district: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    search: Optional[str] = Query(None, description="Search term matching query summary, crop, state, or district"),
+    admin_user: CurrentUser = Depends(require_admin),
+):
+    """
+    Retrieve server-side aggregate advisory analytics and citation metrics.
+    Enforces regional privacy policy by suppressing low-count groups (<3).
+    Returns no raw query text, farmer identifiers, or PII.
+    """
+    record_audit_event(
+        admin_user_id=admin_user.id,
+        action="advisory_analytics_viewed",
+        target_type="advisory_analytics",
+        safe_metadata={
+            "crop": crop,
+            "state": state,
+            "district": district,
+            "start_date": start_date,
+            "end_date": end_date,
+            "search": search,
+        },
+    )
+
+    try:
+        data = fetch_advisory_analytics(
+            crop=crop,
+            state=state,
+            district=district,
+            start_date=start_date,
+            end_date=end_date,
+            search=search,
+        )
+        return data
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Failed to fetch admin advisory analytics: %s", exc)
         raise HTTPException(
             status_code=500,
             detail="The backend encountered an internal error.",
