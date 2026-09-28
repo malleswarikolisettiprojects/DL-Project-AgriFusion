@@ -4,13 +4,17 @@ AgriFusion — Admin Advisory Analytics Test Suite
 Tests requirements for GET /api/v1/admin/advisory-analytics:
   1. Admin-only access (401 without auth, 403 for non-admin).
   2. Aggregation, filters (crop, state, district, days).
-  3. Citation numerator/denominator/percent calculations.
+  3. Citation numerator/denominator/percent calculations with FAIL-CLOSED logic.
   4. Empty dataset behavior (total_queries=0, citation_rate=0%, top_crops=[], regional_queries=[]).
   5. Regional privacy suppression (groups with < 3 queries are suppressed).
   6. No personal or raw-query fields in analytics responses (strict check of fields).
-  7. Database error returns a safe HTTP 500 error response.
+  7. Large dataset (>1000 records) non-truncation aggregation.
+  8. Status filter alias support (activity_status vs status in /api/v1/admin/advisories).
+  9. Database error returns a safe HTTP 500 error response.
 """
 
+import json
+import sqlite3
 import sys
 import uuid
 from pathlib import Path
@@ -23,6 +27,7 @@ if str(BASE_DIR) not in sys.path:
 import pytest
 from fastapi.testclient import TestClient
 
+import App.backend.database.advisories_db as advisories_db_module
 from App.backend.auth.dependencies import CurrentUser, get_current_user, require_admin
 from App.backend.database.advisories_db import (
     init_advisories_db,
@@ -137,11 +142,6 @@ def test_admin_analytics_aggregation_citation_and_privacy_suppression():
     for i in range(4):
         log_advisory_activity(query_text=f"Cotton bollworm query {i}?", crop="Cotton", state="Telangana", district="Warangal", rag_result=rag_with_citations)
 
-    # Total queries = 3 + 2 + 4 = 9 queries
-    # Eligible queries (completed) = 9
-    # Cited queries = 2 (Guntur) + 1 (Visakhapatnam) + 4 (Warangal) = 7
-    # Citation percent = round(7 / 9 * 100, 1) = 77.8%
-
     res = client.get("/api/v1/admin/advisory-analytics")
     assert res.status_code == 200
     data = res.json()
@@ -151,14 +151,11 @@ def test_admin_analytics_aggregation_citation_and_privacy_suppression():
     assert data["citation_rate"]["eligible_queries"] == 9
     assert data["citation_rate"]["percent"] == 77.78
 
-    # Top crops: Cotton (4), Rice (3), Paddy (2)
     crops_map = {item["crop"]: item["query_count"] for item in data["top_crops"]}
     assert crops_map["Cotton"] == 4
     assert crops_map["Rice"] == 3
     assert crops_map["Paddy"] == 2
 
-    # Regional queries: Guntur (3) and Warangal (4) MUST appear.
-    # Visakhapatnam (2) MUST BE SUPPRESSED because 2 < 3 threshold.
     reg_list = data["regional_queries"]
     reg_map = {(r["state"], r["district"]): r["query_count"] for r in reg_list}
 
@@ -169,6 +166,143 @@ def test_admin_analytics_aggregation_citation_and_privacy_suppression():
     assert reg_map[("Telangana", "Warangal")] == 4
 
     assert ("Andhra Pradesh", "Visakhapatnam") not in reg_map, "Groups with < 3 queries must be suppressed for privacy."
+
+
+def test_citation_rate_fail_closed():
+    """
+    Test fail-closed citation rate calculations:
+    Only explicit Boolean True for compliance_json.citations_present (with no_verified_source=False) counts as cited.
+    Missing compliance_json, null citations_present, malformed JSON, or false values MUST fail closed as False (uncited).
+    """
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    # 1. Explicitly Verified Citation -> COUNTED (1)
+    log_advisory_activity(
+        query_text="Explicit citation query",
+        crop="Rice",
+        state="Andhra Pradesh",
+        district="Guntur",
+        rag_result={
+            "answer": "Apply Trichoderma Viride for stem rot control.",
+            "retrieved_passages": [{"source": "ANGRAU", "title": "Plant Pathology", "url": "https://angrau.ac.in"}],
+            "confidence_score": 0.85,
+            "rag_status": "success",
+        },
+    )
+
+    # Directly insert raw rows into the monkeypatched test DB to test edge case compliance_json values:
+    conn = sqlite3.connect(advisories_db_module.DB_PATH)
+    cur = conn.cursor()
+
+    # 2. Missing/None compliance_json -> UNCITED (0)
+    cur.execute("""
+        INSERT INTO advisory_activity (query_id, crop, state, district, activity_status, no_verified_source, compliance_json)
+        VALUES (?, 'Rice', 'Andhra Pradesh', 'Guntur', 'success', 0, NULL)
+    """, (str(uuid.uuid4()),))
+
+    # 3. Malformed JSON -> UNCITED (0)
+    cur.execute("""
+        INSERT INTO advisory_activity (query_id, crop, state, district, activity_status, no_verified_source, compliance_json)
+        VALUES (?, 'Rice', 'Andhra Pradesh', 'Guntur', 'success', 0, 'INVALID_NOT_JSON')
+    """, (str(uuid.uuid4()),))
+
+    # 4. JSON with citations_present = false -> UNCITED (0)
+    cur.execute("""
+        INSERT INTO advisory_activity (query_id, crop, state, district, activity_status, no_verified_source, compliance_json)
+        VALUES (?, 'Rice', 'Andhra Pradesh', 'Guntur', 'success', 0, '{"citations_present": false}')
+    """, (str(uuid.uuid4()),))
+
+    # 5. JSON with missing citations_present key -> UNCITED (0)
+    cur.execute("""
+        INSERT INTO advisory_activity (query_id, crop, state, district, activity_status, no_verified_source, compliance_json)
+        VALUES (?, 'Rice', 'Andhra Pradesh', 'Guntur', 'success', 0, '{"other_key": true}')
+    """, (str(uuid.uuid4()),))
+
+    # 6. Query with no_verified_source = 1 -> UNCITED (0)
+    cur.execute("""
+        INSERT INTO advisory_activity (query_id, crop, state, district, activity_status, no_verified_source, compliance_json)
+        VALUES (?, 'Rice', 'Andhra Pradesh', 'Guntur', 'no_verified_source', 1, '{"citations_present": true}')
+    """, (str(uuid.uuid4()),))
+
+    conn.commit()
+    conn.close()
+
+    res = client.get("/api/v1/admin/advisory-analytics")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total_queries"] == 6
+    assert data["citation_rate"]["eligible_queries"] == 6
+    assert data["citation_rate"]["cited_queries"] == 1
+    assert data["citation_rate"]["percent"] == 16.67
+
+
+def test_large_dataset_untruncated_aggregation():
+    """
+    Test that an advisory dataset larger than 1,000 records (e.g., 1,050 records)
+    is aggregated completely without truncation or missing count data.
+    """
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    conn = sqlite3.connect(advisories_db_module.DB_PATH)
+    cur = conn.cursor()
+
+    rows = []
+    for i in range(1050):
+        qid = f"bulk_q_{i}"
+        crop_val = "Rice" if i < 600 else "Cotton"
+        st_val = "Andhra Pradesh" if i < 700 else "Telangana"
+        dt_val = "Guntur" if i < 700 else "Warangal"
+        comp = json.dumps({"citations_present": True}) if i % 2 == 0 else json.dumps({"citations_present": False})
+        rows.append((qid, crop_val, st_val, dt_val, "success", 0, comp))
+
+    cur.executemany("""
+        INSERT INTO advisory_activity (query_id, crop, state, district, activity_status, no_verified_source, compliance_json)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, rows)
+    conn.commit()
+    conn.close()
+
+    res = client.get("/api/v1/admin/advisory-analytics")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total_queries"] == 1050
+    assert data["citation_rate"]["eligible_queries"] == 1050
+    assert data["citation_rate"]["cited_queries"] == 525  # Exactly 1050 / 2
+    assert data["citation_rate"]["percent"] == 50.0
+
+    crops_map = {item["crop"]: item["query_count"] for item in data["top_crops"]}
+    assert crops_map["Rice"] == 600
+    assert crops_map["Cotton"] == 450
+
+
+def test_admin_advisories_activity_status_alias():
+    """Verify that GET /api/v1/admin/advisories accepts activity_status as alias for status."""
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    rag_ok = {
+        "answer": "Apply Trichoderma for root rot.",
+        "retrieved_passages": [{"source": "ICAR", "title": "Guide"}],
+        "rag_status": "success",
+    }
+
+    log_advisory_activity(query_text="Succ query 1", crop="Rice", state="Andhra Pradesh", district="Guntur", rag_result=rag_ok)
+    log_advisory_activity(query_text="Fail query 1", crop="Rice", state="Andhra Pradesh", district="Guntur", activity_status="failed")
+
+    # Filter using status=success
+    r1 = client.get("/api/v1/admin/advisories?status=success")
+    assert r1.status_code == 200
+    assert r1.json()["total"] == 1
+
+    # Filter using activity_status=success (alias)
+    r2 = client.get("/api/v1/admin/advisories?activity_status=success")
+    assert r2.status_code == 200
+    assert r2.json()["total"] == 1
+    assert r2.json()["items"][0]["activity_status"] == "success"
 
 
 def test_admin_analytics_no_pii_or_raw_queries():
@@ -182,6 +316,7 @@ def test_admin_analytics_no_pii_or_raw_queries():
         state="Andhra Pradesh",
         district="Guntur",
         rag_result={
+            "answer": "Apply Trichoderma Viride.",
             "retrieved_passages": [{"source": "ICAR", "title": "Rice Guide", "url": "https://icar.org.in"}],
             "rag_status": "success",
         },
@@ -194,7 +329,6 @@ def test_admin_analytics_no_pii_or_raw_queries():
     allowed_keys = {"total_queries", "citation_rate", "top_crops", "regional_queries", "privacy_note", "generated_at"}
     assert set(data.keys()) == allowed_keys
 
-    # Convert entire response json string and check for sensitive strings
     raw_str = res.text.lower()
     assert "9876543210" not in raw_str
     assert "confidential" not in raw_str
@@ -206,6 +340,7 @@ def test_admin_analytics_filters():
     app.dependency_overrides[require_admin] = mock_admin_user
 
     rag_ok = {
+        "answer": "Apply Trichoderma Viride.",
         "retrieved_passages": [{"source": "ICAR", "title": "Guide"}],
         "rag_status": "success",
     }

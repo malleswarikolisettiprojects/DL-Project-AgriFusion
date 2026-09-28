@@ -533,19 +533,26 @@ def fetch_advisory_analytics(
             logger.error("Supabase configured but admin client unavailable for advisory analytics.")
             raise RuntimeError("Database query failed for advisory analytics")
         try:
-            q = supabase.table("advisory_activity").select("*")
-            if crop:
-                q = q.eq("crop", crop)
-            if state:
-                q = q.eq("state", state)
-            if district:
-                q = q.eq("district", district)
-            res = q.execute()
-            if res.data is not None:
-                rows_data = res.data
-            else:
-                logger.error("Supabase advisory_activity query returned None response for analytics")
-                raise RuntimeError("Database query failed for advisory analytics")
+            rows_data = []
+            page_size = 1000
+            offset = 0
+            while True:
+                q = supabase.table("advisory_activity").select("*")
+                if crop:
+                    q = q.ilike("crop", crop)
+                if state:
+                    q = q.ilike("state", state)
+                if district:
+                    q = q.ilike("district", district)
+                q = q.range(offset, offset + page_size - 1)
+                res = q.execute()
+                if res.data is None:
+                    logger.error("Supabase advisory_activity query returned None response for analytics")
+                    raise RuntimeError("Database query failed for advisory analytics")
+                rows_data.extend(res.data)
+                if len(res.data) < page_size:
+                    break
+                offset += page_size
         except Exception as exc:
             logger.error("Supabase advisory_activity analytics read failure: %s", exc)
             raise RuntimeError("Database query failed for advisory analytics") from exc
@@ -597,19 +604,29 @@ def fetch_advisory_analytics(
     crop_counts: Dict[str, int] = {}
     region_counts: Dict[tuple, int] = {}
 
+    # Citation rate fail-closed logic:
+    # Denominator (eligible_queries): All completed queries where activity_status is 'success' or 'no_verified_source'.
+    # Numerator (cited_queries): Counted ONLY when:
+    #   1. no_verified_source is False, AND
+    #   2. compliance_json is valid JSON with explicit Boolean true for 'citations_present'.
+    # Missing, null, malformed, or ambiguous compliance records fail closed as False (uncited).
     for r in filtered:
         status = r.get("activity_status") or "success"
         if status in ("success", "no_verified_source"):
             eligible_queries += 1
             is_no_source = bool(r.get("no_verified_source"))
-            citations_present = False
-            try:
-                comp = json.loads(r.get("compliance_json") or "{}")
-                citations_present = bool(comp.get("citations_present", not is_no_source))
-            except Exception:
-                citations_present = not is_no_source
+            cited = False
+            if not is_no_source:
+                try:
+                    comp_raw = r.get("compliance_json")
+                    if comp_raw:
+                        comp = json.loads(comp_raw) if isinstance(comp_raw, str) else comp_raw
+                        if isinstance(comp, dict) and comp.get("citations_present") is True:
+                            cited = True
+                except Exception:
+                    cited = False
 
-            if not is_no_source and citations_present:
+            if cited:
                 cited_queries += 1
 
         c_val = (r.get("crop") or "Unknown").strip().title()

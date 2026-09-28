@@ -1111,7 +1111,8 @@ async def get_admin_advisories(
     crop: Optional[str] = None,
     state: Optional[str] = None,
     district: Optional[str] = None,
-    status: Optional[str] = None,
+    status: Optional[str] = Query(None, description="Activity status filter ('success', 'no_verified_source', 'failed', 'timeout')"),
+    activity_status: Optional[str] = Query(None, description="Alias for status ('success', 'no_verified_source', 'failed', 'timeout')"),
     review_status: Optional[str] = None,
     source_verified: Optional[bool] = None,
     start_date: Optional[str] = None,
@@ -1122,6 +1123,7 @@ async def get_admin_advisories(
     """
     Retrieve anonymized farmer advisory RAG activity and agronomic quality compliance checks.
     """
+    effective_status = status or activity_status
     record_audit_event(
         admin_user_id=admin_user.id,
         action="advisory_activity_viewed",
@@ -1131,7 +1133,7 @@ async def get_admin_advisories(
             "page_size": page_size,
             "crop": crop,
             "state": state,
-            "status": status,
+            "status": effective_status,
             "review_status": review_status,
             "search": search,
         },
@@ -1144,7 +1146,7 @@ async def get_admin_advisories(
             crop=crop,
             state=state,
             district=district,
-            status=status,
+            status=effective_status,
             review_status=review_status,
             source_verified=source_verified,
             start_date=start_date,
