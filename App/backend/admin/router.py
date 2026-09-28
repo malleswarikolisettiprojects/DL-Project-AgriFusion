@@ -345,7 +345,7 @@ class AdminFarmsCountResponse(BaseModel):
     )
 
 
-AdvisoryActivityStatus = Literal["success", "no_verified_source", "failed", "partial"]
+AdvisoryActivityStatus = Literal["success", "no_verified_source", "failed", "partial", "timeout"]
 AdvisoryReviewStatus = Literal["not_reviewed", "needs_review", "reviewed", "resolved"]
 
 

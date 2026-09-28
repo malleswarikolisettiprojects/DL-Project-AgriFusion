@@ -341,15 +341,15 @@ def fetch_advisory_activities(
             offset_chunk = 0
             while True:
                 q = supabase.table("advisory_activity").select("*").order("created_at", desc=True)
-                if crop:
+                if crop and crop.lower() != 'all':
                     q = q.eq("crop", crop)
-                if state:
+                if state and state.lower() != 'all':
                     q = q.eq("state", state)
-                if district:
+                if district and district.lower() != 'all':
                     q = q.eq("district", district)
-                if status:
+                if status and status.lower() != 'all':
                     q = q.eq("activity_status", status)
-                if review_status:
+                if review_status and review_status.lower() != 'all':
                     q = q.eq("review_status", review_status)
                 q = q.range(offset_chunk, offset_chunk + chunk_size - 1)
                 res = q.execute()
@@ -361,54 +361,27 @@ def fetch_advisory_activities(
                     break
                 offset_chunk += chunk_size
         except Exception as exc:
-            logger.error("Supabase advisory_activity read failure: %s. Trying SQLite fallback.", exc)
-            try:
-                conn = _get_db_connection()
-                cursor = conn.cursor()
-                query = "SELECT * FROM advisory_activity WHERE 1=1"
-                params = []
-                if crop:
-                    query += " AND LOWER(crop) = LOWER(?)"
-                    params.append(crop)
-                if state:
-                    query += " AND LOWER(state) = LOWER(?)"
-                    params.append(state)
-                if district:
-                    query += " AND LOWER(district) = LOWER(?)"
-                    params.append(district)
-                if status:
-                    query += " AND activity_status = ?"
-                    params.append(status)
-                if review_status:
-                    query += " AND review_status = ?"
-                    params.append(review_status)
-
-                query += " ORDER BY created_at DESC"
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-                rows_data = [dict(r) for r in rows]
-                conn.close()
-            except Exception:
-                raise RuntimeError("Database query failed for advisory activity") from exc
+            logger.error("Supabase advisory_activity read failure: %s", exc)
+            raise RuntimeError(f"Database query failed for advisory activity: {exc}") from exc
     else:
         try:
             conn = _get_db_connection()
             cursor = conn.cursor()
             query = "SELECT * FROM advisory_activity WHERE 1=1"
             params = []
-            if crop:
+            if crop and crop.lower() != 'all':
                 query += " AND LOWER(crop) = LOWER(?)"
                 params.append(crop)
-            if state:
+            if state and state.lower() != 'all':
                 query += " AND LOWER(state) = LOWER(?)"
                 params.append(state)
-            if district:
+            if district and district.lower() != 'all':
                 query += " AND LOWER(district) = LOWER(?)"
                 params.append(district)
-            if status:
+            if status and status.lower() != 'all':
                 query += " AND activity_status = ?"
                 params.append(status)
-            if review_status:
+            if review_status and review_status.lower() != 'all':
                 query += " AND review_status = ?"
                 params.append(review_status)
 
@@ -446,44 +419,66 @@ def fetch_advisory_activities(
     total = len(filtered)
     paged = filtered[offset : offset + page_size]
 
+    ALLOWED_ACTIVITY_STATUSES = {"success", "no_verified_source", "failed", "partial", "timeout"}
+    ALLOWED_REVIEW_STATUSES = {"not_reviewed", "needs_review", "reviewed", "resolved"}
+
     items = []
     for r in paged:
         sources_raw = r.get("source_citations_json")
         if isinstance(sources_raw, str):
             try:
-                sources = json.loads(sources_raw or "[]")
+                raw_sources = json.loads(sources_raw or "[]")
             except Exception:
-                sources = []
+                raw_sources = []
         elif isinstance(sources_raw, list):
-            sources = sources_raw
+            raw_sources = sources_raw
         else:
-            sources = []
+            raw_sources = []
+
+        sources = []
+        if isinstance(raw_sources, list):
+            for s in raw_sources:
+                if isinstance(s, dict):
+                    sources.append({
+                        "title": str(s.get("title") or s.get("source_name") or "Agronomy Reference Store"),
+                        "organization": str(s.get("organization")) if s.get("organization") is not None else None,
+                        "url": str(s.get("url") or s.get("source_url")) if (s.get("url") or s.get("source_url")) is not None else None,
+                        "verified_date": str(s.get("verified_date")) if s.get("verified_date") is not None else None,
+                    })
 
         comp_raw = r.get("compliance_json")
         if isinstance(comp_raw, str):
             try:
-                compliance = json.loads(comp_raw or "{}")
+                compliance_dict = json.loads(comp_raw or "{}")
             except Exception:
-                compliance = {}
+                compliance_dict = {}
         elif isinstance(comp_raw, dict):
-            compliance = comp_raw
+            compliance_dict = comp_raw
         else:
-            compliance = {}
+            compliance_dict = {}
 
-        default_comp = {
-            "citations_present": True,
-            "dose_claims_source_backed": True,
-            "missing_dose_fields_flagged": True,
-            "scheme_eligibility_qualified": True,
-            "extension_confirmation_flagged": True,
-            "compliance_status": "passed",
+        compliance = {
+            "citations_present": bool(compliance_dict.get("citations_present", True)),
+            "dose_claims_source_backed": bool(compliance_dict.get("dose_claims_source_backed", True)),
+            "missing_dose_fields_flagged": bool(compliance_dict.get("missing_dose_fields_flagged", True)),
+            "scheme_eligibility_qualified": bool(compliance_dict.get("scheme_eligibility_qualified", True)),
+            "extension_confirmation_flagged": bool(compliance_dict.get("extension_confirmation_flagged", True)),
+            "compliance_status": str(compliance_dict.get("compliance_status") or "passed"),
         }
-        if isinstance(compliance, dict):
-            for k, v in default_comp.items():
-                if k not in compliance:
-                    compliance[k] = v
+
+        raw_act = str(r.get("activity_status") or "success").lower().strip()
+        if raw_act not in ALLOWED_ACTIVITY_STATUSES:
+            if "time" in raw_act:
+                act_status = "timeout"
+            elif "fail" in raw_act or "err" in raw_act:
+                act_status = "failed"
+            else:
+                act_status = "failed"
         else:
-            compliance = default_comp
+            act_status = raw_act
+
+        raw_rev = str(r.get("review_status") or "not_reviewed").lower().strip()
+        rev_status = raw_rev if raw_rev in ALLOWED_REVIEW_STATUSES else "not_reviewed"
 
         item = {
             "query_id": str(r.get("query_id")),
@@ -491,12 +486,12 @@ def fetch_advisory_activities(
             "crop": r.get("crop"),
             "state": r.get("state"),
             "district": r.get("district"),
-            "query_summary": r.get("query_summary") or "General agricultural query",
-            "activity_status": r.get("activity_status") or "success",
-            "review_status": r.get("review_status") or "not_reviewed",
+            "query_summary": str(r.get("query_summary") or "General agricultural query"),
+            "activity_status": act_status,
+            "review_status": rev_status,
             "retrieval": {
-                "documents_considered": r.get("documents_considered") or 0,
-                "documents_used": r.get("documents_used") or 0,
+                "documents_considered": int(r.get("documents_considered") or 0),
+                "documents_used": int(r.get("documents_used") or 0),
                 "relevance_threshold_passed": bool(r.get("relevance_threshold_passed")),
                 "no_verified_source": bool(r.get("no_verified_source")),
             },
@@ -608,27 +603,8 @@ def fetch_advisory_analytics(
                     break
                 offset += page_size
         except Exception as exc:
-            logger.error("Supabase advisory_activity analytics read failure: %s. Trying SQLite fallback.", exc)
-            try:
-                conn = _get_db_connection()
-                cursor = conn.cursor()
-                query = "SELECT * FROM advisory_activity WHERE 1=1"
-                params = []
-                if crop and crop.lower() != 'all':
-                    query += " AND LOWER(crop) = LOWER(?)"
-                    params.append(crop)
-                if state and state.lower() != 'all':
-                    query += " AND LOWER(state) = LOWER(?)"
-                    params.append(state)
-                if district and district.lower() != 'all':
-                    query += " AND LOWER(district) = LOWER(?)"
-                    params.append(district)
-                cursor.execute(query, params)
-                rows = cursor.fetchall()
-                rows_data = [dict(r) for r in rows]
-                conn.close()
-            except Exception:
-                raise RuntimeError(f"Database query failed for advisory analytics: {exc}") from exc
+            logger.error("Supabase advisory_activity analytics read failure: %s", exc)
+            raise RuntimeError(f"Database query failed for advisory analytics: {exc}") from exc
     else:
         try:
             conn = _get_db_connection()

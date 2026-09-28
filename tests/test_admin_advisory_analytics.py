@@ -560,14 +560,51 @@ def test_supabase_json_fields_dict_and_string_and_malformed(monkeypatch):
     assert items[0]["sources"][0]["title"] == "ANGRAU"
 
 
-def test_supabase_failure_fallback_to_sqlite(monkeypatch):
+def test_admin_advisories_timeout_status_handled_with_200():
     """
-    Test that when Supabase raises an exception, fetch_advisory_analytics and fetch_advisory_activities fall back to SQLite.
+    Test GET /api/v1/admin/advisories when one returned record has activity_status='timeout'.
+    Verifies that 'timeout' is included in AdvisoryActivityStatus Pydantic model
+    and returns HTTP 200 with the correct status preserved in the item without validation failure.
     """
     app.dependency_overrides[get_current_user] = mock_admin_user
     app.dependency_overrides[require_admin] = mock_admin_user
 
-    # Add a row to SQLite test DB first
+    # Insert a record with activity_status="timeout" directly into test DB
+    conn = sqlite3.connect(advisories_db_module.DB_PATH)
+    cur = conn.cursor()
+    cur.execute("""
+        INSERT INTO advisory_activity (
+            query_id, created_at, crop, state, district, query_summary,
+            activity_status, review_status, documents_considered, documents_used,
+            relevance_threshold_passed, no_verified_source, source_citations_json, compliance_json
+        )
+        VALUES (?, datetime('now'), 'Paddy', 'Andhra Pradesh', 'Guntur', 'Paddy pest diagnosis timeout query',
+                'timeout', 'needs_review', 5, 0, 0, 1, '[]', '{"citations_present": false}')
+    """, (str(uuid.uuid4()),))
+    conn.commit()
+    conn.close()
+
+    res = client.get("/api/v1/admin/advisories?page=1&page_size=25")
+    assert res.status_code == 200, f"Expected 200 OK but got {res.status_code}: {res.text}"
+    data = res.json()
+    assert "items" in data
+    assert len(data["items"]) == 1
+    item = data["items"][0]
+    assert item["activity_status"] == "timeout"
+    assert item["review_status"] == "needs_review"
+    assert item["retrieval"]["no_verified_source"] is True
+
+
+def test_no_sqlite_fallback_when_supabase_configured_and_fails(monkeypatch):
+    """
+    Test that when Supabase is configured (SUPABASE_URL is set) and fails,
+    fetch_advisory_analytics and fetch_advisory_activities DO NOT fall back to local SQLite.
+    Instead, they raise an error and return a safe request-ID HTTP 500 response.
+    """
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    # Add a row to SQLite test DB
     log_advisory_activity(
         query_text="Fallback test query",
         crop="Maize",
@@ -599,13 +636,12 @@ def test_supabase_failure_fallback_to_sqlite(monkeypatch):
     monkeypatch.setattr("App.backend.settings.SUPABASE_URL", "https://mock.supabase.co")
     monkeypatch.setattr("App.backend.database.advisories_db._get_supabase", lambda: FailingSupabaseClient())
 
-    res = client.get("/api/v1/admin/advisory-analytics")
-    assert res.status_code == 200
-    data = res.json()
-    assert data["total_queries"] == 1
-    assert data["top_crops"][0]["crop"] == "Maize"
+    res_analytics = client.get("/api/v1/admin/advisory-analytics")
+    assert res_analytics.status_code == 500
+    assert "Internal Server Error (Request ID:" in res_analytics.json()["detail"]
 
-    adv_res = client.get("/api/v1/admin/advisories")
-    assert adv_res.status_code == 200
-    assert adv_res.json()["total"] == 1
+    res_advisories = client.get("/api/v1/admin/advisories")
+    assert res_advisories.status_code == 500
+    assert "Internal Server Error (Request ID:" in res_advisories.json()["detail"]
+
 

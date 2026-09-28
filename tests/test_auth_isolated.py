@@ -29,6 +29,9 @@ with patch("App.backend.admin.router.load_local_agronomy_documents", return_valu
 
 from App.backend.server import api_submit_feedback
 
+from App.backend.database.auth_db import init_db
+init_db()
+
 app = FastAPI()
 app.include_router(auth_router)
 app.include_router(admin_router)

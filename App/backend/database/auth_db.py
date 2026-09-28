@@ -98,6 +98,19 @@ def init_db():
         except Exception:
             pass
 
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS farms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            state TEXT,
+            district TEXT,
+            crop TEXT,
+            land_area REAL,
+            land_area_unit TEXT,
+            irrigation_type TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
