@@ -368,7 +368,7 @@ def test_admin_analytics_filters():
 
 
 def test_admin_analytics_db_error_returns_500():
-    """Database failure returns HTTP 500 error safely."""
+    """Database failure returns HTTP 500 error safely with request ID detail."""
     app.dependency_overrides[get_current_user] = mock_admin_user
     app.dependency_overrides[require_admin] = mock_admin_user
 
@@ -377,3 +377,235 @@ def test_admin_analytics_db_error_returns_500():
         assert res.status_code == 500
         data = res.json()
         assert "detail" in data
+        assert "Internal Server Error" in data["detail"]
+        assert "(Request ID:" in data["detail"]
+
+
+def test_supabase_query_path_pagination_and_aggregation(monkeypatch):
+    """
+    Test Supabase query path with mocked Supabase client and > 1,000 rows.
+    Verifies that pagination (.range) is invoked and aggregate metrics are complete.
+    """
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    mock_rows = []
+    for i in range(1050):
+        mock_rows.append({
+            "query_id": f"sp_q_{i}",
+            "created_at": "2026-09-28T00:00:00Z",
+            "crop": "Rice" if i < 600 else "Cotton",
+            "state": "Andhra Pradesh" if i < 700 else "Telangana",
+            "district": "Guntur" if i < 700 else "Warangal",
+            "query_summary": f"Query {i}",
+            "activity_status": "success",
+            "no_verified_source": False,
+            "compliance_json": {"citations_present": True} if i % 2 == 0 else {"citations_present": False},
+            "source_citations_json": [{"title": "ICAR Guide", "url": "https://icar.org.in"}],
+        })
+
+    class MockSupabaseQuery:
+        def __init__(self, rows):
+            self.rows = rows
+            self._offset = 0
+            self._limit = 1000
+
+        def select(self, *args, **kwargs):
+            return self
+
+        def order(self, *args, **kwargs):
+            return self
+
+        def eq(self, column, value):
+            return self
+
+        def range(self, start, end):
+            self._offset = start
+            self._limit = end - start + 1
+            return self
+
+        def execute(self):
+            sliced = self.rows[self._offset : self._offset + self._limit]
+            class Res:
+                def __init__(self, data):
+                    self.data = data
+            return Res(sliced)
+
+    class MockSupabaseClient:
+        def table(self, table_name):
+            return MockSupabaseQuery(mock_rows)
+
+    mock_client = MockSupabaseClient()
+    monkeypatch.setattr("App.backend.settings.SUPABASE_URL", "https://mock.supabase.co")
+    monkeypatch.setattr("App.backend.database.advisories_db._get_supabase", lambda: mock_client)
+
+    res = client.get("/api/v1/admin/advisory-analytics")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total_queries"] == 1050
+    assert data["citation_rate"]["eligible_queries"] == 1050
+    assert data["citation_rate"]["cited_queries"] == 525
+    assert data["citation_rate"]["percent"] == 50.0
+
+    crops_map = {item["crop"]: item["query_count"] for item in data["top_crops"]}
+    assert crops_map["Rice"] == 600
+    assert crops_map["Cotton"] == 450
+
+    # Also verify /advisories endpoint with Supabase mock
+    adv_res = client.get("/api/v1/admin/advisories?page_size=25")
+    assert adv_res.status_code == 200
+    adv_data = adv_res.json()
+    assert adv_data["total"] == 1050
+    assert len(adv_data["items"]) == 25
+    assert adv_data["items"][0]["compliance"]["citations_present"] is True
+
+
+def test_supabase_json_fields_dict_and_string_and_malformed(monkeypatch):
+    """
+    Test Supabase returning compliance_json and source_citations_json as dicts/lists vs strings vs malformed/missing JSON.
+    """
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    mock_rows = [
+        # 1. Dict / List returned natively by Supabase PostgREST
+        {
+            "query_id": "q1",
+            "created_at": "2026-09-28T00:00:00Z",
+            "crop": "Rice",
+            "state": "Andhra Pradesh",
+            "district": "Guntur",
+            "query_summary": "Rice blast",
+            "activity_status": "success",
+            "no_verified_source": False,
+            "compliance_json": {"citations_present": True},
+            "source_citations_json": [{"title": "ANGRAU", "url": "https://angrau.ac.in"}],
+        },
+        # 2. String JSON
+        {
+            "query_id": "q2",
+            "created_at": "2026-09-28T00:00:00Z",
+            "crop": "Rice",
+            "state": "Andhra Pradesh",
+            "district": "Guntur",
+            "query_summary": "Rice blight",
+            "activity_status": "success",
+            "no_verified_source": False,
+            "compliance_json": '{"citations_present": true}',
+            "source_citations_json": '[{"title": "ICAR", "url": "https://icar.org.in"}]',
+        },
+        # 3. Missing/null fields
+        {
+            "query_id": "q3",
+            "created_at": "2026-09-28T00:00:00Z",
+            "crop": "Rice",
+            "state": "Andhra Pradesh",
+            "district": "Guntur",
+            "query_summary": "Rice pest",
+            "activity_status": "success",
+            "no_verified_source": False,
+            "compliance_json": None,
+            "source_citations_json": None,
+        },
+        # 4. Malformed JSON
+        {
+            "query_id": "q4",
+            "created_at": "2026-09-28T00:00:00Z",
+            "crop": "Rice",
+            "state": "Andhra Pradesh",
+            "district": "Guntur",
+            "query_summary": "Rice weed",
+            "activity_status": "success",
+            "no_verified_source": False,
+            "compliance_json": "INVALID_JSON",
+            "source_citations_json": "INVALID_JSON",
+        },
+    ]
+
+    class MockSupabaseQuery:
+        def select(self, *args, **kwargs):
+            return self
+        def order(self, *args, **kwargs):
+            return self
+        def eq(self, column, value):
+            return self
+        def range(self, start, end):
+            return self
+        def execute(self):
+            class Res:
+                def __init__(self, data):
+                    self.data = data
+            return Res(mock_rows)
+
+    class MockSupabaseClient:
+        def table(self, table_name):
+            return MockSupabaseQuery()
+
+    monkeypatch.setattr("App.backend.settings.SUPABASE_URL", "https://mock.supabase.co")
+    monkeypatch.setattr("App.backend.database.advisories_db._get_supabase", lambda: MockSupabaseClient())
+
+    res = client.get("/api/v1/admin/advisory-analytics")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total_queries"] == 4
+    assert data["citation_rate"]["eligible_queries"] == 4
+    assert data["citation_rate"]["cited_queries"] == 2  # Only q1 and q2 count as cited
+
+    adv_res = client.get("/api/v1/admin/advisories?page_size=10")
+    assert adv_res.status_code == 200
+    items = adv_res.json()["items"]
+    assert len(items) == 4
+    assert len(items[0]["sources"]) == 1
+    assert items[0]["sources"][0]["title"] == "ANGRAU"
+
+
+def test_supabase_failure_fallback_to_sqlite(monkeypatch):
+    """
+    Test that when Supabase raises an exception, fetch_advisory_analytics and fetch_advisory_activities fall back to SQLite.
+    """
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    # Add a row to SQLite test DB first
+    log_advisory_activity(
+        query_text="Fallback test query",
+        crop="Maize",
+        state="Telangana",
+        district="Warangal",
+        rag_result={
+            "answer": "Apply Fertilizer.",
+            "retrieved_passages": [{"source": "PJTSAU", "title": "Maize Guide", "url": "https://pjtsau.edu.in"}],
+            "rag_status": "success",
+        },
+    )
+
+    class FailingSupabaseQuery:
+        def select(self, *args, **kwargs):
+            return self
+        def order(self, *args, **kwargs):
+            return self
+        def eq(self, column, value):
+            return self
+        def range(self, start, end):
+            return self
+        def execute(self):
+            raise RuntimeError("Supabase connection timeout")
+
+    class FailingSupabaseClient:
+        def table(self, table_name):
+            return FailingSupabaseQuery()
+
+    monkeypatch.setattr("App.backend.settings.SUPABASE_URL", "https://mock.supabase.co")
+    monkeypatch.setattr("App.backend.database.advisories_db._get_supabase", lambda: FailingSupabaseClient())
+
+    res = client.get("/api/v1/admin/advisory-analytics")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["total_queries"] == 1
+    assert data["top_crops"][0]["crop"] == "Maize"
+
+    adv_res = client.get("/api/v1/admin/advisories")
+    assert adv_res.status_code == 200
+    assert adv_res.json()["total"] == 1
+

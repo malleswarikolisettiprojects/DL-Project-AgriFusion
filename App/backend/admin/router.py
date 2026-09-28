@@ -1157,10 +1157,11 @@ async def get_admin_advisories(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Failed to fetch admin advisory activity: %s", exc)
+        req_id = str(uuid.uuid4())[:8]
+        logger.error("[%s] Failed to fetch admin advisory activity: %s", req_id, exc)
         raise HTTPException(
             status_code=500,
-            detail="The backend encountered an internal error.",
+            detail=f"Internal Server Error (Request ID: {req_id})",
         ) from exc
 
 
@@ -1209,10 +1210,11 @@ async def get_admin_advisory_analytics(
     except HTTPException:
         raise
     except Exception as exc:
-        logger.error("Failed to fetch admin advisory analytics: %s", exc)
+        req_id = str(uuid.uuid4())[:8]
+        logger.error("[%s] Failed to fetch admin advisory analytics: %s", req_id, exc)
         raise HTTPException(
             status_code=500,
-            detail="The backend encountered an internal error.",
+            detail=f"Internal Server Error (Request ID: {req_id})",
         ) from exc
 
 

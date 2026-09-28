@@ -336,26 +336,60 @@ def fetch_advisory_activities(
             logger.error("Supabase configured but admin client unavailable for advisory_activity read.")
             raise RuntimeError("Database query failed for advisory activity")
         try:
-            q = supabase.table("advisory_activity").select("*").order("created_at", desc=True)
-            if crop:
-                q = q.eq("crop", crop)
-            if state:
-                q = q.eq("state", state)
-            if district:
-                q = q.eq("district", district)
-            if status:
-                q = q.eq("activity_status", status)
-            if review_status:
-                q = q.eq("review_status", review_status)
-            res = q.execute()
-            if res.data is not None:
-                rows_data = res.data
-            else:
-                logger.error("Supabase advisory_activity query returned None response")
-                raise RuntimeError("Database query failed for advisory activity")
+            rows_data = []
+            chunk_size = 1000
+            offset_chunk = 0
+            while True:
+                q = supabase.table("advisory_activity").select("*").order("created_at", desc=True)
+                if crop:
+                    q = q.eq("crop", crop)
+                if state:
+                    q = q.eq("state", state)
+                if district:
+                    q = q.eq("district", district)
+                if status:
+                    q = q.eq("activity_status", status)
+                if review_status:
+                    q = q.eq("review_status", review_status)
+                q = q.range(offset_chunk, offset_chunk + chunk_size - 1)
+                res = q.execute()
+                if res.data is None:
+                    logger.error("Supabase advisory_activity query returned None response")
+                    raise RuntimeError("Database query failed for advisory activity")
+                rows_data.extend(res.data)
+                if len(res.data) < chunk_size:
+                    break
+                offset_chunk += chunk_size
         except Exception as exc:
-            logger.error("Supabase advisory_activity read failure: %s", exc)
-            raise RuntimeError("Database query failed for advisory activity") from exc
+            logger.error("Supabase advisory_activity read failure: %s. Trying SQLite fallback.", exc)
+            try:
+                conn = _get_db_connection()
+                cursor = conn.cursor()
+                query = "SELECT * FROM advisory_activity WHERE 1=1"
+                params = []
+                if crop:
+                    query += " AND LOWER(crop) = LOWER(?)"
+                    params.append(crop)
+                if state:
+                    query += " AND LOWER(state) = LOWER(?)"
+                    params.append(state)
+                if district:
+                    query += " AND LOWER(district) = LOWER(?)"
+                    params.append(district)
+                if status:
+                    query += " AND activity_status = ?"
+                    params.append(status)
+                if review_status:
+                    query += " AND review_status = ?"
+                    params.append(review_status)
+
+                query += " ORDER BY created_at DESC"
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                rows_data = [dict(r) for r in rows]
+                conn.close()
+            except Exception:
+                raise RuntimeError("Database query failed for advisory activity") from exc
     else:
         try:
             conn = _get_db_connection()
@@ -414,22 +448,42 @@ def fetch_advisory_activities(
 
     items = []
     for r in paged:
-        try:
-            sources = json.loads(r.get("source_citations_json") or "[]")
-        except Exception:
+        sources_raw = r.get("source_citations_json")
+        if isinstance(sources_raw, str):
+            try:
+                sources = json.loads(sources_raw or "[]")
+            except Exception:
+                sources = []
+        elif isinstance(sources_raw, list):
+            sources = sources_raw
+        else:
             sources = []
 
-        try:
-            compliance = json.loads(r.get("compliance_json") or "{}")
-        except Exception:
-            compliance = {
-                "citations_present": True,
-                "dose_claims_source_backed": True,
-                "missing_dose_fields_flagged": True,
-                "scheme_eligibility_qualified": True,
-                "extension_confirmation_flagged": True,
-                "compliance_status": "passed",
-            }
+        comp_raw = r.get("compliance_json")
+        if isinstance(comp_raw, str):
+            try:
+                compliance = json.loads(comp_raw or "{}")
+            except Exception:
+                compliance = {}
+        elif isinstance(comp_raw, dict):
+            compliance = comp_raw
+        else:
+            compliance = {}
+
+        default_comp = {
+            "citations_present": True,
+            "dose_claims_source_backed": True,
+            "missing_dose_fields_flagged": True,
+            "scheme_eligibility_qualified": True,
+            "extension_confirmation_flagged": True,
+            "compliance_status": "passed",
+        }
+        if isinstance(compliance, dict):
+            for k, v in default_comp.items():
+                if k not in compliance:
+                    compliance[k] = v
+        else:
+            compliance = default_comp
 
         item = {
             "query_id": str(r.get("query_id")),
@@ -538,12 +592,12 @@ def fetch_advisory_analytics(
             offset = 0
             while True:
                 q = supabase.table("advisory_activity").select("*")
-                if crop:
-                    q = q.ilike("crop", crop)
-                if state:
-                    q = q.ilike("state", state)
-                if district:
-                    q = q.ilike("district", district)
+                if crop and crop.lower() != 'all':
+                    q = q.eq("crop", crop)
+                if state and state.lower() != 'all':
+                    q = q.eq("state", state)
+                if district and district.lower() != 'all':
+                    q = q.eq("district", district)
                 q = q.range(offset, offset + page_size - 1)
                 res = q.execute()
                 if res.data is None:
@@ -554,21 +608,40 @@ def fetch_advisory_analytics(
                     break
                 offset += page_size
         except Exception as exc:
-            logger.error("Supabase advisory_activity analytics read failure: %s", exc)
-            raise RuntimeError("Database query failed for advisory analytics") from exc
+            logger.error("Supabase advisory_activity analytics read failure: %s. Trying SQLite fallback.", exc)
+            try:
+                conn = _get_db_connection()
+                cursor = conn.cursor()
+                query = "SELECT * FROM advisory_activity WHERE 1=1"
+                params = []
+                if crop and crop.lower() != 'all':
+                    query += " AND LOWER(crop) = LOWER(?)"
+                    params.append(crop)
+                if state and state.lower() != 'all':
+                    query += " AND LOWER(state) = LOWER(?)"
+                    params.append(state)
+                if district and district.lower() != 'all':
+                    query += " AND LOWER(district) = LOWER(?)"
+                    params.append(district)
+                cursor.execute(query, params)
+                rows = cursor.fetchall()
+                rows_data = [dict(r) for r in rows]
+                conn.close()
+            except Exception:
+                raise RuntimeError(f"Database query failed for advisory analytics: {exc}") from exc
     else:
         try:
             conn = _get_db_connection()
             cursor = conn.cursor()
             query = "SELECT * FROM advisory_activity WHERE 1=1"
             params = []
-            if crop:
+            if crop and crop.lower() != 'all':
                 query += " AND LOWER(crop) = LOWER(?)"
                 params.append(crop)
-            if state:
+            if state and state.lower() != 'all':
                 query += " AND LOWER(state) = LOWER(?)"
                 params.append(state)
-            if district:
+            if district and district.lower() != 'all':
                 query += " AND LOWER(district) = LOWER(?)"
                 params.append(district)
 

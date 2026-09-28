@@ -139,7 +139,8 @@ def test_admin_list_read_failure_returns_500():
     with patch("App.backend.admin.router.fetch_advisory_activities", side_effect=RuntimeError("Database query failed for advisory activity")):
         res = client.get("/api/v1/admin/advisories")
         assert res.status_code == 500
-        assert res.json()["detail"] == "The backend encountered an internal error."
+        assert "Internal Server Error" in res.json()["detail"]
+        assert "(Request ID:" in res.json()["detail"]
 
     app.dependency_overrides.clear()
 
