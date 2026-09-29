@@ -20,27 +20,35 @@ def get_growth_stage(crop_name: str):
     Returns a dict, or None if the crop isn't in the table.
     Cached in-process since this reference table changes rarely.
     """
-    if not crop_name:
+    if not crop_name or supabase is None:
         return None
 
-    response = (
-        supabase
-        .table("crop_growth_stages")
-        .select("*")
-        .ilike("crop_name", crop_name.strip())
-        .limit(1)
-        .execute()
-    )
-    rows = response.data or []
-    return rows[0] if rows else None
+    try:
+        response = (
+            supabase
+            .table("crop_growth_stages")
+            .select("*")
+            .ilike("crop_name", crop_name.strip())
+            .limit(1)
+            .execute()
+        )
+        rows = response.data or []
+        return rows[0] if rows else None
+    except Exception:
+        return None
 
 
 @lru_cache(maxsize=1)
 def get_all_crop_names():
     """All crop names available in crop_growth_stages, sorted A-Z."""
-    response = supabase.table("crop_growth_stages").select("crop_name").execute()
-    rows = response.data or []
-    return tuple(sorted(r["crop_name"] for r in rows))
+    if supabase is None:
+        return ()
+    try:
+        response = supabase.table("crop_growth_stages").select("crop_name").execute()
+        rows = response.data or []
+        return tuple(sorted(r["crop_name"] for r in rows))
+    except Exception:
+        return ()
 
 
 def compute_date_range(crop_name: str, start_date: date = None):

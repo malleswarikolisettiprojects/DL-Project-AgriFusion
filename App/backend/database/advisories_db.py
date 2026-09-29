@@ -210,40 +210,53 @@ def log_advisory_activity(
             rag_status = rag_result.get("rag_status")
             no_verified_source = (rag_status == "no_verified_match" or rag_result.get("answer") is None)
             activity_status = "no_verified_source" if no_verified_source else "success"
+        if activity_status in ("failed", "timeout"):
+            no_verified_source = True
+            docs_considered = 0
+            docs_used = 0
+            relevance_passed = False
+            unique_sources = []
         else:
-            no_verified_source = (activity_status == "no_verified_source")
+            no_verified_source = (activity_status == "no_verified_source") or (rag_result.get("answer") is None)
+            passages = rag_result.get("retrieved_passages") or []
+            docs_considered = int(rag_result.get("documents_considered") or rag_result.get("local_docs_scanned") or len(passages))
 
-        passages = rag_result.get("retrieved_passages") or []
-        docs_considered = rag_result.get("local_docs_scanned", len(passages))
-        docs_used = len(passages) if (not no_verified_source and activity_status == "success") else 0
-        relevance_passed = (rag_result.get("confidence_score", 0) > 0.05) if (not no_verified_source and activity_status == "success") else False
+            raw_sources = []
+            if rag_result.get("source_title"):
+                raw_sources.append({
+                    "title": rag_result.get("source_title"),
+                    "organization": rag_result.get("source_institute"),
+                    "url": rag_result.get("source_url"),
+                })
+            for p in passages:
+                raw_sources.append({
+                    "title": p.get("source"),
+                    "organization": p.get("institute"),
+                    "url": p.get("url"),
+                })
+            sanitized_sources_list = [sanitize_source(s) for s in raw_sources]
 
-        raw_sources = []
-        if rag_result.get("source_title"):
-            raw_sources.append({
-                "title": rag_result.get("source_title"),
-                "organization": rag_result.get("source_institute"),
-                "url": rag_result.get("source_url"),
-            })
-        for p in passages:
-            raw_sources.append({
-                "title": p.get("source"),
-                "organization": p.get("institute"),
-                "url": p.get("url"),
-            })
-        sanitized_sources_list = [sanitize_source(s) for s in raw_sources]
+            unique_sources = []
+            seen_keys = set()
+            for s in sanitized_sources_list:
+                k = (s["title"], s["url"])
+                if k not in seen_keys:
+                    seen_keys.add(k)
+                    unique_sources.append(s)
 
-        unique_sources = []
-        seen_keys = set()
-        for s in sanitized_sources_list:
-            k = (s["title"], s["url"])
-            if k not in seen_keys:
-                seen_keys.add(k)
-                unique_sources.append(s)
+            if not no_verified_source and activity_status == "success":
+                docs_used = max(len(passages), len(unique_sources), 1 if rag_result.get("source_title") else 0)
+                relevance_passed = (rag_result.get("confidence_score", 0) > 0.05)
+            else:
+                docs_used = 0
+                relevance_passed = False
 
         compliance_data = run_advisory_compliance_checks(rag_result)
-        if activity_status in ("failed", "timeout"):
-            compliance_data["compliance_status"] = "failed"
+        if activity_status in ("failed", "timeout") or no_verified_source:
+            compliance_data["compliance_status"] = "failed" if activity_status in ("failed", "timeout") else "no_verified_source"
+            compliance_data["citations_present"] = False
+        else:
+            compliance_data["citations_present"] = (len(unique_sources) > 0)
 
         record = {
             "query_id": query_id,

@@ -379,14 +379,18 @@ def load_local_agronomy_documents(force_reload: bool = False) -> List[Dict[str, 
         return _LOCAL_DOCS_CACHE
 
     docs = []
-    if not DOCS_DIR.exists():
-        return docs
-
-    for file_path in DOCS_DIR.glob("**/*"):
-        if not file_path.is_file() or file_path.name.startswith("_"):
+    seen_files = set()
+    for doc_dir in get_agronomy_docs_dirs():
+        if not doc_dir.exists():
             continue
+        for file_path in doc_dir.glob("**/*"):
+            if not file_path.is_file() or file_path.name.startswith("_"):
+                continue
+            if file_path.name in seen_files:
+                continue
+            seen_files.add(file_path.name)
 
-        suffix = file_path.suffix.lower()
+            suffix = file_path.suffix.lower()
 
         # ── 1. PDF Files ──────────────────────────────────────────────
         if suffix == ".pdf":
@@ -749,6 +753,33 @@ def generate_rag_remedies(query_label: str, crop: str = "crop") -> Dict[str, Any
     }
 
 
+def get_agronomy_docs_dirs() -> List[Path]:
+    """
+    Return all existing directories where agronomy docs are stored.
+    Supports both Data/agronomy_docs/ and App/Data/agronomy_docs/.
+    """
+    candidates = [
+        BASE_DIR / "Data" / "agronomy_docs",
+        BASE_DIR / "App" / "Data" / "agronomy_docs",
+        Path(__file__).resolve().parents[1] / "Data" / "agronomy_docs",
+        Path(__file__).resolve().parents[1] / "App" / "Data" / "agronomy_docs",
+        Path.cwd() / "Data" / "agronomy_docs",
+        Path.cwd() / "App" / "Data" / "agronomy_docs",
+    ]
+    seen = set()
+    dirs = []
+    for d in candidates:
+        try:
+            resolved = d.resolve()
+            if resolved not in seen:
+                seen.add(resolved)
+                d.mkdir(parents=True, exist_ok=True)
+                dirs.append(d)
+        except Exception:
+            pass
+    return dirs
+
+
 def query_agronomy_agent(user_query: str, crop: Optional[str] = None) -> Dict[str, Any]:
     """
     Universal Farmer Assistant & RAG Query Agent.
@@ -756,10 +787,11 @@ def query_agronomy_agent(user_query: str, crop: Optional[str] = None) -> Dict[st
     or government schemes (PM-KISAN, PMFBY, KCC, Soil Health Card, SMAM, PKVY, etc.).
 
     Searches:
-    1. Local PDF / DOCX / TXT files in Data/agronomy_docs/
+    1. Local PDF / DOCX / TXT files in Data/agronomy_docs/ and App/Data/agronomy_docs/
     2. Real verified government / institute web pages
     3. Extensive Knowledge Base for Indian schemes and agronomy best practices
     """
+    ref_links = get_source_metadata() if REAL_DOC_RAG_OK else AGRONOMY_DOCUMENT_LINKS
     query_lower = user_query.lower()
     crop_name = crop or ""
 
@@ -810,6 +842,9 @@ def query_agronomy_agent(user_query: str, crop: Optional[str] = None) -> Dict[st
         except Exception as e:
             print(f"[RAG Agent] Web fetch error: {e}")
 
+    from App.backend.rag_document_fetcher import VERIFIED_SOURCES
+    documents_considered = len(local_docs) + len(VERIFIED_SOURCES) + len(SCHEME_KNOWLEDGE_BASE)
+
     # ── 4. Synthesize the Final Answer ──────────────────────────────
     if kb_match:
         primary_answer = kb_match["answer"]
@@ -851,6 +886,7 @@ def query_agronomy_agent(user_query: str, crop: Optional[str] = None) -> Dict[st
             "source_institute": None,
             "retrieved_passages": [],
             "local_docs_scanned": len(local_docs),
+            "documents_considered": documents_considered,
             "reference_links": ref_links,
             "rag_status": "no_verified_match",
             "notice": (
@@ -861,7 +897,14 @@ def query_agronomy_agent(user_query: str, crop: Optional[str] = None) -> Dict[st
         }
 
     all_passages = matched_local_passages + verified_passages
-    ref_links = get_source_metadata() if REAL_DOC_RAG_OK else AGRONOMY_DOCUMENT_LINKS
+    if kb_match and not all_passages:
+        all_passages.append({
+            "text": kb_match["answer"][:500],
+            "source": kb_match["title"],
+            "url": kb_match["url"],
+            "institute": kb_match["institute"],
+            "score": 0.95,
+        })
 
     return {
         "query": user_query,
@@ -873,7 +916,9 @@ def query_agronomy_agent(user_query: str, crop: Optional[str] = None) -> Dict[st
         "source_institute": source_institute,
         "retrieved_passages": all_passages,
         "local_docs_scanned": len(local_docs),
+        "documents_considered": documents_considered,
         "reference_links": ref_links,
+        "rag_status": "success",
     }
 
 

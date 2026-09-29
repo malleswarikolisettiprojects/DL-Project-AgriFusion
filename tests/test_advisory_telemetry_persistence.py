@@ -183,3 +183,132 @@ def test_log_advisory_activity_returns_explicit_dict(monkeypatch):
     assert res_fail["telemetry_persisted"] is False
     assert res_fail["query_id"] is None
     assert res_fail["request_id"] == "req-direct-err"
+
+
+def test_timeout_query_persists_telemetry_and_returns_query_id():
+    """
+    Test POST /api/v1/agent/query when RAG query times out (asyncio.TimeoutError):
+    - Returns HTTP 504 with error_code='RAG_SERVICE_TIMEOUT'.
+    - Contains telemetry_persisted=True, query_id, request_id if telemetry insert succeeded.
+    - Admin list GET /api/v1/admin/advisories shows activity_status='timeout', documents_used=0,
+      empty source_citations_json, no_verified_source=True, citations_present=False.
+    """
+    import asyncio
+    import json
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    with patch("App.backend.server.query_agronomy_agent", side_effect=asyncio.TimeoutError()):
+        res = client.post(
+            "/api/v1/agent/query",
+            json={
+                "query": "Rice blast disease treatment with yellow spots on leaves",
+                "crop": "Rice",
+                "state": "Telangana",
+                "district": "Karimnagar",
+            },
+        )
+        assert res.status_code == 504
+        data = res.json()
+        assert data["error_code"] == "RAG_SERVICE_TIMEOUT"
+        assert data["telemetry_persisted"] is True
+        created_query_id = data["query_id"]
+        req_id = data["request_id"]
+        assert created_query_id is not None
+        assert req_id is not None
+
+        # Admin fetches advisories list and verifies exact record consistency
+        admin_res = client.get("/api/v1/admin/advisories")
+        assert admin_res.status_code == 200
+        admin_data = admin_res.json()
+        matching_items = [i for i in admin_data["items"] if i["query_id"] == created_query_id]
+        assert len(matching_items) == 1
+        item = matching_items[0]
+
+        assert item["activity_status"] == "timeout"
+        assert item["retrieval"]["documents_used"] == 0
+        assert item["retrieval"]["no_verified_source"] is True
+        assert item["sources"] == []
+        assert item["compliance"]["citations_present"] is False
+        assert item["compliance"]["compliance_status"] == "failed"
+
+        # Verify safe query summary (does not expose raw question text or PII)
+        assert "Rice" in item["query_summary"]
+        assert "Rice blast disease treatment with yellow spots" not in item["query_summary"]
+
+
+def test_timeout_query_returns_false_flag_when_telemetry_insert_fails():
+    """
+    Test POST /api/v1/agent/query when RAG times out AND telemetry insert fails:
+    - Returns HTTP 504 with telemetry_persisted=False, query_id=None, request_id present.
+    """
+    import asyncio
+    failing_telemetry_res = {
+        "telemetry_persisted": False,
+        "query_id": None,
+        "request_id": "test-timeout-err-1",
+    }
+
+    with patch("App.backend.server.query_agronomy_agent", side_effect=asyncio.TimeoutError()):
+        with patch("App.backend.server.log_advisory_activity", return_value=failing_telemetry_res):
+            res = client.post(
+                "/api/v1/agent/query",
+                json={
+                    "query": "Pest control timing for Maize borer?",
+                    "crop": "Maize",
+                },
+            )
+            assert res.status_code == 504
+            data = res.json()
+            assert data["error_code"] == "RAG_SERVICE_TIMEOUT"
+            assert data["telemetry_persisted"] is False
+            assert data["query_id"] is None
+            assert data["request_id"] is not None
+
+
+def test_rice_irrigation_query_persists_success_and_citations_to_admin():
+    """
+    Integration test:
+    Rice irrigation query POST /api/v1/agent/query:
+    - Succeeds with real answer, documents_considered > 0, telemetry_persisted=True, query_id.
+    - Admin list GET /api/v1/admin/advisories shows activity_status='success', documents_used >= 1,
+      real sources in sources list, no_verified_source=False, citations_present=True.
+    """
+    app.dependency_overrides[get_current_user] = mock_admin_user
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    res = client.post(
+        "/api/v1/agent/query",
+        json={
+            "query": "How much water is needed for rice crop irrigation schedule?",
+            "crop": "Rice",
+            "state": "Andhra Pradesh",
+            "district": "Guntur",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert data["telemetry_persisted"] is True
+    created_query_id = data["query_id"]
+    assert created_query_id is not None
+    assert data["agent_response"]["rag_status"] == "success"
+    assert data["agent_response"]["documents_considered"] > 0
+
+    # Verify Admin List GET reflects exact record
+    admin_res = client.get("/api/v1/admin/advisories")
+    assert admin_res.status_code == 200
+    admin_data = admin_res.json()
+    matching_items = [i for i in admin_data["items"] if i["query_id"] == created_query_id]
+    assert len(matching_items) == 1
+    item = matching_items[0]
+
+    assert item["activity_status"] == "success"
+    assert item["retrieval"]["documents_considered"] > 0
+    assert item["retrieval"]["documents_used"] >= 1
+    assert item["retrieval"]["no_verified_source"] is False
+    assert len(item["sources"]) >= 1
+    assert item["compliance"]["citations_present"] is True
+    assert item["compliance"]["compliance_status"] == "passed"
+
+

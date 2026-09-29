@@ -1312,6 +1312,7 @@ async def api_agent_query(req: AgentQueryRequest):
     except asyncio.TimeoutError:
         logger.error("[%s] Agent query TIMEOUT (>45s)", req_id)
         telemetry_persisted = False
+        query_id = None
         try:
             telemetry_res = log_advisory_activity(
                 query_text=req.query,
@@ -1324,16 +1325,18 @@ async def api_agent_query(req: AgentQueryRequest):
             )
             if isinstance(telemetry_res, dict):
                 telemetry_persisted = bool(telemetry_res.get("telemetry_persisted"))
+                query_id = telemetry_res.get("query_id") if telemetry_persisted else None
         except Exception:
             pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_TIMEOUT", request_id=req_id)
         return make_error_response(
             504, "agent", "RAG_SERVICE_TIMEOUT", "Agronomy AI agent request timed out.", retryable=True,
-            extra_fields={"telemetry_persisted": telemetry_persisted, "request_id": req_id}
+            extra_fields={"telemetry_persisted": telemetry_persisted, "query_id": query_id, "request_id": req_id}
         )
     except Exception as err:
         logger.exception("[%s] Agent query failed: %s", req_id, err)
         telemetry_persisted = False
+        query_id = None
         try:
             telemetry_res = log_advisory_activity(
                 query_text=req.query,
@@ -1346,12 +1349,13 @@ async def api_agent_query(req: AgentQueryRequest):
             )
             if isinstance(telemetry_res, dict):
                 telemetry_persisted = bool(telemetry_res.get("telemetry_persisted"))
+                query_id = telemetry_res.get("query_id") if telemetry_persisted else None
         except Exception:
             pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_FAILED", request_id=req_id)
         return make_error_response(
             504, "agent", "RAG_SERVICE_FAILED", f"Agronomy AI agent service failed: {str(err)}", retryable=True,
-            extra_fields={"telemetry_persisted": telemetry_persisted, "request_id": req_id}
+            extra_fields={"telemetry_persisted": telemetry_persisted, "query_id": query_id, "request_id": req_id}
         )
 
 

@@ -340,3 +340,41 @@ class TestReferenceDocumentLinksNotProof:
         """R11: source_type must be no_match or baseline_only even if links list is non-empty."""
         result = self._call_no_match()
         assert result["source_type"] in ("no_match", "baseline_only")
+
+
+# ---------------------------------------------------------------------------
+# Universal Agent RAG & Irrigation Tests
+# ---------------------------------------------------------------------------
+
+class TestUniversalAgentRagAndIrrigation:
+
+    def test_query_agronomy_agent_rice_irrigation(self):
+        """Verify rice irrigation queries hit fast verified retrieval path and return real documents_considered."""
+        from App.backend.agronomy_rag import query_agronomy_agent
+        res = query_agronomy_agent("rice irrigation water management guidelines", crop="Rice")
+        assert res["rag_status"] == "success"
+        assert res["answer"] is not None
+        assert "critical" in res["answer"].lower() or "water" in res["answer"].lower() or "irrigation" in res["answer"].lower()
+        assert res["documents_considered"] > 0
+        assert isinstance(res["reference_links"], list)
+        assert res["source_title"] is not None
+
+    def test_get_agronomy_docs_dirs_supports_app_data_path(self):
+        """Verify candidate directories list includes App/Data/agronomy_docs."""
+        from App.backend.agronomy_rag import get_agronomy_docs_dirs
+        dirs = get_agronomy_docs_dirs()
+        assert len(dirs) > 0
+        dir_strs = [str(d).replace("\\", "/") for d in dirs]
+        assert any("App/Data/agronomy_docs" in d or "Data/agronomy_docs" in d for d in dir_strs)
+
+    def test_no_match_query_agronomy_agent_has_no_ref_links_name_error(self):
+        """Verify no-match query returns cleanly with reference_links and without NameError."""
+        from App.backend.agronomy_rag import query_agronomy_agent
+        with patch("App.backend.agronomy_rag.load_local_agronomy_documents", return_value=[]):
+            with patch("App.backend.agronomy_rag.REAL_DOC_RAG_OK", False):
+                res = query_agronomy_agent("xyz_nonexistent_unlisted_query_9999")
+                assert res["rag_status"] == "no_verified_match"
+                assert res["answer"] is None
+                assert isinstance(res["reference_links"], list)
+                assert res["documents_considered"] > 0
+

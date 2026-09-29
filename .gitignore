@@ -22,11 +22,26 @@ Thumbs.db
 
 # SQLite local auth fallback — contains user data
 App/Data/users.db
+App/Data/users.db-shm
+App/Data/users.db-wal
 Data/users.db
+Data/users.db-shm
+Data/users.db-wal
+*.db-shm
+*.db-wal
 
-# Temporary uploads / local test images
+# Temporary uploads / local test images & job logs
 App/Data/diagnostic_images/
 Data/diagnostic_images/
+Data/disease_jobs/
+
+# Agent scratch directory
+scratch/
+
+# Node modules & build artifacts
+node_modules/
+dist/
+.vite/
 
 # Large data files
 # Data/AP_TS_Weather_Dataset.csv

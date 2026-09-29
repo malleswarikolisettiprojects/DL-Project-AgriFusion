@@ -46,6 +46,13 @@ CACHE_MAX_AGE_DAYS = 30
 # ============================================================
 VERIFIED_SOURCES: List[Dict] = [
     {
+        "id": "tnau_irrigation_mgt",
+        "title": "TNAU Agritech - Irrigation & Water Management Package of Practices",
+        "url": "https://agritech.tnau.ac.in/agriculture/agri_irrigationmgt.html",
+        "tags": ["irrigation", "water", "water management", "rice irrigation", "paddy water", "water stress", "dry spell", "drip", "sprinkler", "alternate wetting and drying", "awd", "water requirement"],
+        "institute": "Tamil Nadu Agricultural University (TNAU) & ICAR",
+    },
+    {
         "id": "tnau_paddy",
         "title": "TNAU Agritech - Paddy Disease & Pest Management",
         "url": "https://agritech.tnau.ac.in/crop_protection/crop_prot_cropDisease_cereals_paddy.html",
