@@ -1014,6 +1014,12 @@ def predict_yield(input_data):
     )
 
 
+    total_tonnes = round(float(total_yield), 2)
+    total_quintals = round(total_tonnes * 10, 2)
+    bags_50kg = int(round(total_quintals * 2))
+    yield_q_per_ha = round(float(predicted_yield) * 10, 2)
+    yield_q_per_acre = round((float(predicted_yield) * 10) / 2.47105, 2)
+
     # ========================================================
     # 26. SAVE TO SUPABASE
     # ========================================================
@@ -1049,6 +1055,15 @@ def predict_yield(input_data):
             "silt": soil.get("silt") or soil.get("Silt") if soil else None,
             "elevation": weather.get("elevation") if weather else None,
             "predicted_yield": predicted_yield,
+            "total_tonnes": total_tonnes,
+            "yield_q_per_ha": yield_q_per_ha,
+            "yield_q_per_acre": yield_q_per_acre,
+            "result_summary": {
+                "predicted_yield": predicted_yield,
+                "total_tonnes": total_tonnes,
+                "yield_q_per_ha": yield_q_per_ha,
+                "yield_q_per_acre": yield_q_per_acre,
+            },
         }
         save_result = save_yield_prediction(save_data)
 
@@ -1082,12 +1097,6 @@ def predict_yield(input_data):
     # ========================================================
     # 27. RETURN RESULT
     # ========================================================
-
-    total_tonnes = round(float(total_yield), 2)
-    total_quintals = round(total_tonnes * 10, 2)
-    bags_50kg = int(round(total_quintals * 2))
-    yield_q_per_ha = round(float(predicted_yield) * 10, 2)
-    yield_q_per_acre = round((float(predicted_yield) * 10) / 2.47105, 2)
 
     return {
 

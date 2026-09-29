@@ -325,3 +325,88 @@ def test_admin_get_predictions_uncollected_latency_returns_null(monkeypatch):
 
     analytics = data.get("analytics", {})
     assert analytics.get("average_latency_ms") is None # Returns null when uncollected
+
+
+def test_admin_predictions_yield_outcome_contract(monkeypatch):
+    """Verify stored yield result_summary and normalized outcome fields are returned by GET /api/v1/admin/predictions."""
+    app.dependency_overrides[require_admin] = mock_admin_user
+
+    mock_admin_c = MagicMock()
+    fake_db_records = [
+        {
+            "id": "44444444-5555-6666-7777-888888888888",
+            "created_at": "2026-09-29T10:00:00+00:00",
+            "model_type": "yield_prediction",
+            "crop": "Paddy",
+            "state": "Andhra Pradesh",
+            "district": "Guntur",
+            "request_summary": {"season": "Kharif", "area_ha": 3.5, "year": 2026},
+            "result_summary": {
+                "predicted_yield": 4.25,
+                "total_tonnes": 14.88,
+                "yield_q_per_ha": 42.5,
+                "yield_q_per_acre": 17.2,
+            },
+            "status": "success",
+            "latency_ms": 210.0,
+            "error_code": None,
+            "user_id": "11111111-1111-1111-1111-111111111111",
+        },
+        {
+            "id": "55555555-6666-7777-8888-999999999999",
+            "created_at": "2026-09-29T10:05:00+00:00",
+            "model_type": "yield_prediction",
+            "crop": "Maize",
+            "state": "Telangana",
+            "district": "Warangal",
+            "request_summary": {"season": "Rabi", "area_ha": 1.0, "year": 2026},
+            "result_summary": {
+                "predicted_yield": 3.10,
+                # total_tonnes, yield_q_per_ha, yield_q_per_acre omitted to verify null preservation
+            },
+            "status": "success",
+            "latency_ms": 195.0,
+            "error_code": None,
+            "user_id": None,
+        }
+    ]
+
+    mock_execute = MagicMock()
+    mock_execute.execute.return_value.data = fake_db_records
+    mock_execute.execute.return_value.count = 2
+    mock_admin_c.table.return_value.select.return_value = mock_execute
+    mock_execute.order.return_value = mock_execute
+
+    monkeypatch.setattr("App.backend.database.save_predictions._get_admin_client", lambda: mock_admin_c)
+
+    res = client.get("/api/v1/admin/predictions")
+    assert res.status_code == 200
+    data = res.json()
+
+    assert data["total"] == 2
+    items = data["items"]
+    assert len(items) == 2
+
+    item0 = items[0]
+    assert item0["model_type"] == "yield_prediction"
+    assert item0["result_summary"] == {
+        "predicted_yield": 4.25,
+        "total_tonnes": 14.88,
+        "yield_q_per_ha": 42.5,
+        "yield_q_per_acre": 17.2,
+    }
+    assert item0["predicted_yield"] == 4.25
+    assert item0["total_tonnes"] == 14.88
+    assert item0["yield_q_per_ha"] == 42.5
+    assert item0["yield_q_per_acre"] == 17.2
+    # Ensure no email or sensitive personal data is exposed
+    assert "user_email" not in item0
+    assert "email" not in item0
+
+    item1 = items[1]
+    assert item1["model_type"] == "yield_prediction"
+    assert item1["predicted_yield"] == 3.10
+    assert item1["total_tonnes"] is None
+    assert item1["yield_q_per_ha"] is None
+    assert item1["yield_q_per_acre"] is None
+

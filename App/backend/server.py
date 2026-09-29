@@ -652,7 +652,12 @@ async def api_predict_yield(
                 "area": req.area_ha,
                 "predicted_yield": result.get("predicted_yield") or result.get("yield_t_per_ha"),
                 "request_summary": {"season": req.season, "area_ha": req.area_ha, "year": req.year},
-                "result_summary": {"predicted_yield": result.get("predicted_yield"), "total_production_tonnes": result.get("total_production_tonnes")},
+                "result_summary": {
+                    "predicted_yield": result.get("predicted_yield"),
+                    "total_tonnes": result.get("total_tonnes") or result.get("total_yield"),
+                    "yield_q_per_ha": result.get("yield_q_per_ha"),
+                    "yield_q_per_acre": result.get("yield_q_per_acre"),
+                },
                 "status": "success",
                 "latency_ms": duration_ms,
             })

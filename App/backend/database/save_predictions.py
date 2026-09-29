@@ -309,7 +309,12 @@ def save_yield_prediction(data):
         "state": data.get("state"),
         "district": data.get("district"),
         "request_summary": data.get("request_summary") or {"season": data.get("season"), "year": data.get("year"), "area": data.get("area")},
-        "result_summary": data.get("result_summary") or {"predicted_yield": data.get("predicted_yield")},
+        "result_summary": data.get("result_summary") or {
+            "predicted_yield": data.get("predicted_yield"),
+            "total_tonnes": data.get("total_tonnes") or data.get("total_yield"),
+            "yield_q_per_ha": data.get("yield_q_per_ha"),
+            "yield_q_per_acre": data.get("yield_q_per_acre"),
+        },
         "status": data.get("status", "success"),
         "latency_ms": data.get("latency_ms"),
         "error_code": data.get("error_code"),

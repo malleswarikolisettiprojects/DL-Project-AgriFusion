@@ -975,7 +975,32 @@ def get_ml_predictions_for_admin(
 
         formatted_items = []
         for r in paged_records:
-            formatted_items.append({
+            raw_res_summary = r.get("result_summary")
+            if isinstance(raw_res_summary, str):
+                try:
+                    res_summary = json.loads(raw_res_summary)
+                except Exception:
+                    res_summary = {}
+            elif isinstance(raw_res_summary, dict):
+                res_summary = raw_res_summary
+            else:
+                res_summary = {}
+
+            raw_req_summary = r.get("request_summary")
+            if isinstance(raw_req_summary, str):
+                try:
+                    req_summary = json.loads(raw_req_summary)
+                except Exception:
+                    req_summary = {}
+            elif isinstance(raw_req_summary, dict):
+                req_summary = raw_req_summary
+            else:
+                req_summary = {}
+
+            model_type = r.get("model_type") or ""
+            is_yield = "yield" in model_type.lower()
+
+            item = {
                 "id": str(r.get("id")),
                 "created_at": r.get("created_at"),
                 "model_type": r.get("model_type"),
@@ -983,13 +1008,36 @@ def get_ml_predictions_for_admin(
                 "crop": r.get("crop"),
                 "state": r.get("state"),
                 "district": r.get("district"),
-                "request_summary": r.get("request_summary") or {},
-                "result_summary": r.get("result_summary") or {},
+                "request_summary": req_summary,
+                "result_summary": res_summary,
                 "status": r.get("status") or "success",
                 "latency_ms": float(r["latency_ms"]) if r.get("latency_ms") is not None else None,
                 "error_code": r.get("error_code"),
                 "user_id": str(r["user_id"]) if r.get("user_id") else None,
-            })
+            }
+
+            if is_yield:
+                py = r.get("predicted_yield") if r.get("predicted_yield") is not None else res_summary.get("predicted_yield")
+                tt = r.get("total_tonnes") if r.get("total_tonnes") is not None else res_summary.get("total_tonnes")
+                if tt is None:
+                    tt = res_summary.get("total_production_tonnes")
+                if tt is None:
+                    tt = res_summary.get("total_yield")
+
+                yha = r.get("yield_q_per_ha") if r.get("yield_q_per_ha") is not None else res_summary.get("yield_q_per_ha")
+                yac = r.get("yield_q_per_acre") if r.get("yield_q_per_acre") is not None else res_summary.get("yield_q_per_acre")
+
+                item["predicted_yield"] = float(py) if isinstance(py, (int, float)) else py
+                item["total_tonnes"] = float(tt) if isinstance(tt, (int, float)) else tt
+                item["yield_q_per_ha"] = float(yha) if isinstance(yha, (int, float)) else yha
+                item["yield_q_per_acre"] = float(yac) if isinstance(yac, (int, float)) else yac
+            else:
+                item["predicted_yield"] = None
+                item["total_tonnes"] = None
+                item["yield_q_per_ha"] = None
+                item["yield_q_per_acre"] = None
+
+            formatted_items.append(item)
 
         success_count = sum(1 for r in cohort_records if r.get("status") == "success")
         error_count = sum(1 for r in cohort_records if r.get("status") == "failed")
