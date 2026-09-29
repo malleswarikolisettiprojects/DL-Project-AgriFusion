@@ -136,6 +136,7 @@ def make_error_response(
     message: str,
     retryable: bool = True,
     details: Optional[Dict[str, Any]] = None,
+    extra_fields: Optional[Dict[str, Any]] = None,
 ):
     """Return safe structured JSON error response."""
     payload = {
@@ -147,6 +148,8 @@ def make_error_response(
     }
     if details:
         payload["details"] = details
+    if extra_fields:
+        payload.update(extra_fields)
     return JSONResponse(status_code=status_code, content=payload)
 
 
@@ -1297,10 +1300,10 @@ async def api_agent_query(req: AgentQueryRequest):
         except Exception:
             pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=422, error_code="INVALID_INPUT", request_id=req_id)
-        resp = make_error_response(422, "agent", "INVALID_INPUT", str(ve), retryable=False)
-        resp["telemetry_persisted"] = telemetry_persisted
-        resp["request_id"] = req_id
-        return resp
+        return make_error_response(
+            422, "agent", "INVALID_INPUT", str(ve), retryable=False,
+            extra_fields={"telemetry_persisted": telemetry_persisted, "request_id": req_id}
+        )
     except asyncio.TimeoutError:
         logger.error("[%s] Agent query TIMEOUT (>45s)", req_id)
         telemetry_persisted = False
@@ -1319,10 +1322,10 @@ async def api_agent_query(req: AgentQueryRequest):
         except Exception:
             pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_TIMEOUT", request_id=req_id)
-        resp = make_error_response(504, "agent", "RAG_SERVICE_TIMEOUT", "Agronomy AI agent request timed out.", retryable=True)
-        resp["telemetry_persisted"] = telemetry_persisted
-        resp["request_id"] = req_id
-        return resp
+        return make_error_response(
+            504, "agent", "RAG_SERVICE_TIMEOUT", "Agronomy AI agent request timed out.", retryable=True,
+            extra_fields={"telemetry_persisted": telemetry_persisted, "request_id": req_id}
+        )
     except Exception as err:
         logger.exception("[%s] Agent query failed: %s", req_id, err)
         telemetry_persisted = False
@@ -1341,10 +1344,10 @@ async def api_agent_query(req: AgentQueryRequest):
         except Exception:
             pass
         record_system_event("advisory_query", module="advisory", status="failed", http_status=504, error_code="RAG_SERVICE_FAILED", request_id=req_id)
-        resp = make_error_response(504, "agent", "RAG_SERVICE_FAILED", f"Agronomy AI agent service failed: {str(err)}", retryable=True)
-        resp["telemetry_persisted"] = telemetry_persisted
-        resp["request_id"] = req_id
-        return resp
+        return make_error_response(
+            504, "agent", "RAG_SERVICE_FAILED", f"Agronomy AI agent service failed: {str(err)}", retryable=True,
+            extra_fields={"telemetry_persisted": telemetry_persisted, "request_id": req_id}
+        )
 
 
 # 6c. Farmer Advisory Feedback Submission API
