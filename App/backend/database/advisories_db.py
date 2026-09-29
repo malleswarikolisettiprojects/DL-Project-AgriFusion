@@ -270,14 +270,14 @@ def log_advisory_activity(
         if SUPABASE_URL:
             if supabase is None:
                 logger.error("[%s] Supabase configured but admin client unavailable for advisory_activity write.", req_token)
-                return False
+                return {"telemetry_persisted": False, "query_id": None, "request_id": req_token}
             try:
                 supabase.table("advisory_activity").insert(record).execute()
                 logger.info("[%s] Persisted advisory activity record (query_id=%s, status=%s) to Supabase.", req_token, query_id, activity_status)
-                return True
+                return {"telemetry_persisted": True, "query_id": query_id, "request_id": req_token}
             except Exception as exc:
                 logger.error("[%s] Supabase write failure for advisory_activity (query_id=%s): %s", req_token, query_id, exc)
-                return False
+                return {"telemetry_persisted": False, "query_id": None, "request_id": req_token}
         else:
             conn = _get_db_connection()
             cursor = conn.cursor()
@@ -300,11 +300,11 @@ def log_advisory_activity(
             conn.commit()
             conn.close()
             logger.info("[%s] Persisted advisory activity record (query_id=%s, status=%s) to SQLite.", req_token, query_id, activity_status)
-            return True
+            return {"telemetry_persisted": True, "query_id": query_id, "request_id": req_token}
 
     except Exception as err:
         logger.error("[%s] Failed to log advisory activity telemetry: %s", req_token, err)
-        return False
+        return {"telemetry_persisted": False, "query_id": None, "request_id": req_token}
 
 
 def fetch_advisory_activities(

@@ -125,7 +125,8 @@ def test_supabase_write_failure_behavior(monkeypatch):
             state="Telangana",
             request_id="req-test-123",
         )
-        assert res is False
+        assert res["telemetry_persisted"] is False
+        assert res["query_id"] is None
 
 
 # -----------------------------------------------------------------------------
