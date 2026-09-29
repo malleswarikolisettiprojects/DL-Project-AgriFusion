@@ -1,15 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import {
+  DISEASE_CHECK_CROPS,
+  DISEASE_CROP_ALIASES,
   cleanDocumentTitle,
   formatConfidencePercent,
   formatGuidanceList,
+  getCanonicalDiseaseCropKey,
   getCanonicalDiseaseKey,
   getRetrievedPassage,
   isVerifiedRagMatch,
   isValidPublicHttpUrl,
   parseDiseaseApiResponse,
   processSecondaryCandidates,
+  resolveDiseaseCropInitial,
 } from '../views/DiseaseDetectionView';
+import { COMMON_CROPS } from '../data/agriData';
 
 describe('DiseaseDetectionView - Disease Response Parsing & Unwrapping', () => {
   it('1. Correctly parses "detected" outcome with primary diagnosis, top confidence, and secondary matches', () => {
@@ -500,6 +505,56 @@ describe('DiseaseDetectionView - Disease Response Parsing & Unwrapping', () => {
     );
 
     expect(parsed.symptom_checklist).toBeNull();
+  });
+
+  it('23. Disease Check Crop Selector - Contains exactly 13 canonical options, aliases map correctly, and unsupported crops return null', () => {
+    expect(DISEASE_CHECK_CROPS.length).toBe(13);
+
+    const expectedMap = [
+      { label: 'Banana', value: 'banana' },
+      { label: 'Beans', value: 'beans' },
+      { label: 'Blackgram', value: 'blackgram' },
+      { label: 'Muskmelon / Cantaloupe', value: 'muskmelon' },
+      { label: 'Rice / Paddy', value: 'rice' },
+      { label: 'Maize / Corn', value: 'maize' },
+      { label: 'Cotton', value: 'cotton' },
+      { label: 'Grapes', value: 'grapes' },
+      { label: 'Mango', value: 'mango' },
+      { label: 'Orange / Citrus', value: 'orange' },
+      { label: 'Papaya', value: 'papaya' },
+      { label: 'Pomegranate', value: 'pomegranate' },
+      { label: 'Watermelon', value: 'watermelon' },
+    ];
+
+    expect(DISEASE_CHECK_CROPS).toEqual(expectedMap);
+
+    // Verify alias mappings
+    expect(DISEASE_CROP_ALIASES['paddy']).toBe('rice');
+    expect(DISEASE_CROP_ALIASES['corn']).toBe('maize');
+    expect(DISEASE_CROP_ALIASES['cantaloupe']).toBe('muskmelon');
+    expect(DISEASE_CROP_ALIASES['citrus']).toBe('orange');
+
+    expect(getCanonicalDiseaseCropKey('Paddy')).toBe('rice');
+    expect(getCanonicalDiseaseCropKey('corn')).toBe('maize');
+    expect(getCanonicalDiseaseCropKey('Cantaloupe')).toBe('muskmelon');
+    expect(getCanonicalDiseaseCropKey('citrus')).toBe('orange');
+    expect(getCanonicalDiseaseCropKey('Rice')).toBe('rice');
+    expect(getCanonicalDiseaseCropKey('Banana')).toBe('banana');
+
+    // Unsupported / unlisted crops cannot be submitted as crop-specific keys
+    expect(getCanonicalDiseaseCropKey('Wheat')).toBeNull();
+    expect(getCanonicalDiseaseCropKey('Tomato')).toBeNull();
+    expect(getCanonicalDiseaseCropKey('Brinjal')).toBeNull();
+
+    // Verify resolveDiseaseCropInitial
+    expect(resolveDiseaseCropInitial('Paddy')).toEqual({ cropValue: 'rice', customCropName: '' });
+    expect(resolveDiseaseCropInitial('Tomato')).toEqual({ cropValue: 'Other', customCropName: 'Tomato' });
+
+    // Confirm COMMON_CROPS in agriData remains intact with all crops for other modules
+    expect(COMMON_CROPS).toBeDefined();
+    expect(COMMON_CROPS.length).toBeGreaterThan(13);
+    expect(COMMON_CROPS).toContain('Tomato');
+    expect(COMMON_CROPS).toContain('Chilli');
   });
 });
 

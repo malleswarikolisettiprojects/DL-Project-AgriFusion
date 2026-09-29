@@ -26,11 +26,59 @@ import {
 } from '../components/CommonUI';
 import { PageHeader } from '../components/Navigation';
 import { FeedbackPrompt } from '../components/FeedbackPrompt';
-import { COMMON_CROPS } from '../data/agriData';
 import { predictDisease, unwrapApiResponse } from '../lib/api';
 import { compressImage } from '../lib/imageCompress';
 import { savePrediction } from '../lib/farmStorage';
 import type { UserFarmProfile } from '../types';
+
+export interface DiseaseCheckCropOption {
+  label: string;
+  value: string;
+}
+
+export const DISEASE_CHECK_CROPS: DiseaseCheckCropOption[] = [
+  { label: 'Banana', value: 'banana' },
+  { label: 'Beans', value: 'beans' },
+  { label: 'Blackgram', value: 'blackgram' },
+  { label: 'Muskmelon / Cantaloupe', value: 'muskmelon' },
+  { label: 'Rice / Paddy', value: 'rice' },
+  { label: 'Maize / Corn', value: 'maize' },
+  { label: 'Cotton', value: 'cotton' },
+  { label: 'Grapes', value: 'grapes' },
+  { label: 'Mango', value: 'mango' },
+  { label: 'Orange / Citrus', value: 'orange' },
+  { label: 'Papaya', value: 'papaya' },
+  { label: 'Pomegranate', value: 'pomegranate' },
+  { label: 'Watermelon', value: 'watermelon' },
+];
+
+export const DISEASE_CROP_ALIASES: Record<string, string> = {
+  paddy: 'rice',
+  corn: 'maize',
+  cantaloupe: 'muskmelon',
+  citrus: 'orange',
+};
+
+export function getCanonicalDiseaseCropKey(inputCrop: string): string | null {
+  if (!inputCrop) return null;
+  const clean = inputCrop.trim().toLowerCase();
+  const normalized = DISEASE_CROP_ALIASES[clean] || clean;
+  const found = DISEASE_CHECK_CROPS.find(
+    (c) => c.value === normalized || c.label.toLowerCase() === clean
+  );
+  return found ? found.value : null;
+}
+
+export function resolveDiseaseCropInitial(profileCrop?: string | null): { cropValue: string; customCropName: string } {
+  if (!profileCrop) {
+    return { cropValue: 'rice', customCropName: '' };
+  }
+  const key = getCanonicalDiseaseCropKey(profileCrop);
+  if (key) {
+    return { cropValue: key, customCropName: '' };
+  }
+  return { cropValue: 'Other', customCropName: profileCrop };
+}
 
 export interface RagRemedies {
   cultural_practices?: string[] | string | null;
@@ -949,8 +997,9 @@ export function parseDiseaseApiResponse(
 }
 
 export function DiseaseDetectionView({ profile }: { profile: UserFarmProfile }) {
-  const [crop, setCrop] = useState(profile.crop || 'Rice');
-  const [customCropName, setCustomCropName] = useState('');
+  const initialCrop = resolveDiseaseCropInitial(profile.crop);
+  const [crop, setCrop] = useState(initialCrop.cropValue);
+  const [customCropName, setCustomCropName] = useState(initialCrop.customCropName);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -1109,28 +1158,43 @@ export function DiseaseDetectionView({ profile }: { profile: UserFarmProfile }) 
                 onChange={(e) => setCrop(e.target.value)}
                 className="w-full p-2.5 rounded-xl border border-stone-300 bg-white text-xs font-medium focus:ring-1 focus:ring-emerald-500"
               >
-                {COMMON_CROPS.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-                <option value="Other">Other / Unlisted Crop</option>
+                <optgroup label="Crops with Crop-Specific Disease Models">
+                  {DISEASE_CHECK_CROPS.map((c) => (
+                    <option key={c.value} value={c.value}>
+                      {c.label}
+                    </option>
+                  ))}
+                </optgroup>
+                <optgroup label="General Pest & Nutrient Screening">
+                  <option value="Other">Other / Unlisted Crop (General Screening Only)</option>
+                </optgroup>
               </select>
             </div>
 
             {crop === 'Other' && (
-              <div>
-                <label className="block text-xs font-semibold text-stone-700 mb-1">
-                  Specify Crop Name <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={customCropName}
-                  onChange={(e) => setCustomCropName(e.target.value)}
-                  placeholder="e.g. Brinjal, Onion, Okra, Rose"
-                  className="w-full p-2.5 rounded-xl border border-stone-300 bg-white text-xs font-medium focus:ring-1 focus:ring-emerald-500"
-                  required
-                />
+              <div className="space-y-2 sm:col-span-2">
+                <div>
+                  <label className="block text-xs font-semibold text-stone-700 mb-1">
+                    Specify Crop Name <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={customCropName}
+                    onChange={(e) => setCustomCropName(e.target.value)}
+                    placeholder="e.g. Brinjal, Onion, Okra, Rose"
+                    className="w-full p-2.5 rounded-xl border border-stone-300 bg-white text-xs font-medium focus:ring-1 focus:ring-emerald-500"
+                    required
+                  />
+                </div>
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs flex items-start gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="font-semibold">General Screening Notice</p>
+                    <p className="text-[11px] text-amber-800 mt-0.5">
+                      No crop-specific disease model is configured for unlisted crops. Submitting will perform General Pest & Nutrient Deficiency screening only.
+                    </p>
+                  </div>
+                </div>
               </div>
             )}
           </div>

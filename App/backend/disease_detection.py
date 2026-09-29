@@ -55,6 +55,13 @@ def _get_admin_client():
 
 app = FastAPI(title="Crop Disease & Pest Multi-Provider Inference API", version="3.1.0")
 
+CROP_ALIASES: dict[str, str] = {
+    "paddy": "rice",
+    "corn": "maize",
+    "cantaloupe": "muskmelon",
+    "citrus": "orange",
+}
+
 # Registered Crop Models with verified Roboflow Universe and Local PyTorch weights
 CROP_MODELS: dict[str, list[dict[str, str]]] = {
     "banana": [
@@ -72,11 +79,6 @@ CROP_MODELS: dict[str, list[dict[str, str]]] = {
         {"provider": "roboflow", "name": "melon-disease-j55st", "model_id": "melon-disease-j55st/5", "url": "https://universe.roboflow.com/choza-q6p0q/melon-disease-j55st"},
     ],
     "rice": [
-        {"provider": "roboflow", "name": "pests-wropv", "model_id": "pests-wropv/3", "url": "https://universe.roboflow.com/ali-s5zbn/pests-wropv"},
-        {"provider": "roboflow", "name": "rice-leaf-disease-s1asn", "model_id": "rice-leaf-disease-s1asn/2", "url": "https://universe.roboflow.com/riceleafdiseasedetection/rice-leaf-disease-s1asn"},
-        {"provider": "roboflow", "name": "rice-i9qwz", "model_id": "rice-i9qwz/2", "url": "https://universe.roboflow.com/rice-pest/rice-i9qwz"},
-    ],
-    "paddy": [
         {"provider": "roboflow", "name": "pests-wropv", "model_id": "pests-wropv/3", "url": "https://universe.roboflow.com/ali-s5zbn/pests-wropv"},
         {"provider": "roboflow", "name": "rice-leaf-disease-s1asn", "model_id": "rice-leaf-disease-s1asn/2", "url": "https://universe.roboflow.com/riceleafdiseasedetection/rice-leaf-disease-s1asn"},
         {"provider": "roboflow", "name": "rice-i9qwz", "model_id": "rice-i9qwz/2", "url": "https://universe.roboflow.com/rice-pest/rice-i9qwz"},
@@ -573,6 +575,7 @@ def predict_disease_and_pests(
     t_start = time.time()
     req_id = request_id or str(uuid.uuid4())[:8]
     crop_clean = crop.strip().lower()
+    crop_clean = CROP_ALIASES.get(crop_clean, crop_clean)
     is_custom_crop = crop_clean not in CROP_MODELS
     custom_crop_notice = None
 

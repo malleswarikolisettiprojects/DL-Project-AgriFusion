@@ -289,15 +289,16 @@ def test_inference_stored_row_admin_response_agreement():
     mock_query_chain.select.return_value = mock_query_chain
     mock_query_chain.order.return_value = mock_query_chain
     mock_query_chain.range.return_value = mock_query_chain
-    mock_query_chain.execute.side_effect = [mock_count_obj, mock_items_obj]
+    mock_query_chain.execute.side_effect = [mock_count_obj, mock_items_obj, mock_items_obj]
 
     mock_admin_sb_read = MagicMock()
     mock_admin_sb_read.table.return_value = mock_query_chain
 
-    with patch("App.backend.database.farmer_db._get_admin_supabase", return_value=mock_admin_sb_read):
-        diag_res = get_all_diagnostics_for_admin(page=1, page_size=10)
-        total = diag_res["total"]
-        items = diag_res["items"]
+    with patch("App.backend.settings.SUPABASE_URL", "https://fake.supabase.co"):
+        with patch("App.backend.database.farmer_db._get_admin_supabase", return_value=mock_admin_sb_read):
+            diag_res = get_all_diagnostics_for_admin(page=1, page_size=10)
+            total = diag_res["total"]
+            items = diag_res["items"]
 
     assert total == 1
     admin_item = items[0]
@@ -773,6 +774,25 @@ def test_secure_disease_job_endpoint():
     res_auth = client.get(f"/api/v1/predict/disease/job/{job_id}?token={token}")
     assert res_auth.status_code == 200
     assert res_auth.json()["job_id"] == job_id
+
+
+def test_crop_models_registry_canonical_keys():
+    """Verify CROP_MODELS contains exactly the 13 backend-supported canonical crop keys and CROP_ALIASES normalizes aliases."""
+    from App.backend.disease_detection import CROP_MODELS, CROP_ALIASES
+
+    expected_keys = {
+        "banana", "beans", "blackgram", "muskmelon", "rice",
+        "maize", "cotton", "grapes", "mango", "orange",
+        "papaya", "pomegranate", "watermelon"
+    }
+    assert set(CROP_MODELS.keys()) == expected_keys
+    assert len(CROP_MODELS) == 13
+
+    assert CROP_ALIASES.get("paddy") == "rice"
+    assert CROP_ALIASES.get("corn") == "maize"
+    assert CROP_ALIASES.get("cantaloupe") == "muskmelon"
+    assert CROP_ALIASES.get("citrus") == "orange"
+
 
 
 
